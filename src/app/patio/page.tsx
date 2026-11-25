@@ -14,7 +14,17 @@ import {
   query,
   where,
 } from 'firebase/firestore';
-import { Plus, X, CheckCircle2, PackagePlus, Download, Ban, Home } from 'lucide-react';
+import {
+  Plus,
+  X,
+  CheckCircle2,
+  PackagePlus,
+  Download,
+  Ban,
+  Home,
+  Pencil,
+  Check,
+} from 'lucide-react';
 
 export default function PatioPage() {
   const [unidades, setUnidades] = useState<Unidad[]>([]);
@@ -30,6 +40,8 @@ export default function PatioPage() {
   const [remisionInput, setRemisionInput] = useState('');
   const [remisiones, setRemisiones] = useState<string[]>([]);
   const [extraRemision, setExtraRemision] = useState<Record<string, string>>({});
+  const [editandoDestinoId, setEditandoDestinoId] = useState<string | null>(null);
+  const [nuevoDestino, setNuevoDestino] = useState('');
   const [loading, setLoading] = useState(false);
   const [cancelandoId, setCancelandoId] = useState<string | null>(null);
 
@@ -130,7 +142,7 @@ export default function PatioPage() {
     setLoading(false);
   };
 
-  const agregarRemisionACargaActiva = async (carga: Carga) => {
+  const agregarRemisionACarga = async (carga: Carga) => {
     const nueva = (extraRemision[carga.id] || '').trim().toUpperCase();
     if (!nueva || carga.remisiones.includes(nueva)) return;
 
@@ -139,6 +151,29 @@ export default function PatioPage() {
     });
 
     setExtraRemision({ ...extraRemision, [carga.id]: '' });
+  };
+
+  const quitarRemisionDeCarga = async (carga: Carga, remisionAQuitar: string) => {
+    await updateDoc(doc(db, 'cargas', carga.id), {
+      remisiones: carga.remisiones.filter((r) => r !== remisionAQuitar),
+    });
+  };
+
+  const iniciarEdicionDestino = (carga: Carga) => {
+    setEditandoDestinoId(carga.id);
+    setNuevoDestino(carga.destino);
+  };
+
+  const guardarDestino = async (cargaId: string) => {
+    const limpio = nuevoDestino.trim();
+    if (!limpio) return;
+
+    await updateDoc(doc(db, 'cargas', cargaId), {
+      destino: limpio,
+    });
+
+    setEditandoDestinoId(null);
+    setNuevoDestino('');
   };
 
   const despacharUnidad = async (id: string) => {
@@ -349,20 +384,67 @@ export default function PatioPage() {
                 key={carga.id}
                 className="bg-white rounded-2xl p-5 shadow-sm border-l-4 border-l-amber-500 border border-slate-200 space-y-4"
               >
-                <div className="flex justify-between items-start">
-                  <div>
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-lg text-slate-900">{carga.unidadNombre}</span>
                       <span className="text-xs font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
                         Vuelta #{carga.vuelta}
                       </span>
                     </div>
-                    <p className="text-sm text-slate-600 font-medium">
-                      Chofer: <span className="text-slate-900">{carga.choferNombre}</span> • Destino:{' '}
-                      <span className="text-slate-900">{carga.destino}</span>
+
+                    <p className="text-sm text-slate-600 font-medium mt-0.5">
+                      Chofer: <span className="text-slate-900">{carga.choferNombre}</span>
                     </p>
+
+                    {editandoDestinoId === carga.id ? (
+                      <div className="flex items-center gap-1.5 mt-1.5">
+                        <input
+                          type="text"
+                          value={nuevoDestino}
+                          onChange={(e) => setNuevoDestino(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              guardarDestino(carga.id);
+                            }
+                          }}
+                          className="flex-1 text-sm rounded-lg border border-amber-400 px-2.5 py-1.5 outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => guardarDestino(carga.id)}
+                          className="bg-emerald-600 text-white p-1.5 rounded-lg hover:bg-emerald-500"
+                          title="Guardar destino"
+                        >
+                          <Check className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditandoDestinoId(null)}
+                          className="bg-slate-200 text-slate-700 p-1.5 rounded-lg hover:bg-slate-300"
+                          title="Cancelar"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-sm text-slate-600 font-medium">
+                          Destino: <span className="text-slate-900">{carga.destino}</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => iniciarEdicionDestino(carga)}
+                          className="text-xs text-amber-700 hover:text-amber-900 inline-flex items-center gap-1 font-semibold"
+                        >
+                          <Pencil className="w-3 h-3" /> Editar
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <span className="text-xs text-slate-500">
+
+                  <span className="text-xs text-slate-500 shrink-0">
                     Inicio:{' '}
                     {new Date(carga.horaInicio).toLocaleTimeString('es-MX', {
                       hour: '2-digit',
@@ -379,9 +461,17 @@ export default function PatioPage() {
                     {carga.remisiones.map((r: string) => (
                       <span
                         key={r}
-                        className="bg-slate-100 border border-slate-300 text-slate-800 text-xs font-bold px-2.5 py-1 rounded-md"
+                        className="inline-flex items-center gap-1 bg-slate-100 border border-slate-300 text-slate-800 text-xs font-bold px-2.5 py-1 rounded-md"
                       >
                         {r}
+                        <button
+                          type="button"
+                          onClick={() => quitarRemisionDeCarga(carga, r)}
+                          title={`Quitar ${r}`}
+                          className="text-slate-400 hover:text-red-600"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
                       </span>
                     ))}
                   </div>
@@ -397,14 +487,14 @@ export default function PatioPage() {
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          agregarRemisionACargaActiva(carga);
+                          agregarRemisionACarga(carga);
                         }
                       }}
                       className="flex-1 text-sm rounded-lg border border-slate-300 px-3 py-2 uppercase outline-none focus:border-amber-500"
                     />
                     <button
                       type="button"
-                      onClick={() => agregarRemisionACargaActiva(carga)}
+                      onClick={() => agregarRemisionACarga(carga)}
                       className="text-xs font-bold bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded-lg"
                     >
                       Sumar
@@ -440,19 +530,66 @@ export default function PatioPage() {
                 className="bg-white rounded-2xl p-5 shadow-sm border-l-4 border-l-emerald-500 border border-slate-200 space-y-3"
               >
                 <div className="flex justify-between items-start gap-2">
-                  <div>
+                  <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-lg text-slate-900">{carga.unidadNombre}</span>
                       <span className="text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded">
                         Vuelta #{carga.vuelta}
                       </span>
                     </div>
-                    <p className="text-sm text-slate-600 font-medium">
-                      Chofer: <span className="text-slate-900">{carga.choferNombre}</span> • Destino:{' '}
-                      <span className="text-slate-900">{carga.destino}</span>
+
+                    <p className="text-sm text-slate-600 font-medium mt-0.5">
+                      Chofer: <span className="text-slate-900">{carga.choferNombre}</span>
                     </p>
+
+                    {editandoDestinoId === carga.id ? (
+                      <div className="flex items-center gap-1.5 mt-1.5">
+                        <input
+                          type="text"
+                          value={nuevoDestino}
+                          onChange={(e) => setNuevoDestino(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              guardarDestino(carga.id);
+                            }
+                          }}
+                          className="flex-1 text-sm rounded-lg border border-emerald-400 px-2.5 py-1.5 outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => guardarDestino(carga.id)}
+                          className="bg-emerald-600 text-white p-1.5 rounded-lg hover:bg-emerald-500"
+                          title="Guardar destino"
+                        >
+                          <Check className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditandoDestinoId(null)}
+                          className="bg-slate-200 text-slate-700 p-1.5 rounded-lg hover:bg-slate-300"
+                          title="Cancelar"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-sm text-slate-600 font-medium">
+                          Destino: <span className="text-slate-900">{carga.destino}</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => iniciarEdicionDestino(carga)}
+                          className="text-xs text-emerald-700 hover:text-emerald-900 inline-flex items-center gap-1 font-semibold"
+                        >
+                          <Pencil className="w-3 h-3" /> Editar
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <div className="text-right text-xs text-slate-500">
+
+                  <div className="text-right text-xs text-slate-500 shrink-0">
                     <div>
                       Cargó:{' '}
                       {new Date(carga.horaInicio).toLocaleTimeString('es-MX', {
@@ -472,18 +609,51 @@ export default function PatioPage() {
                   </div>
                 </div>
 
-                {carga.remisiones.length > 0 && (
+                <div>
                   <div className="flex flex-wrap gap-1.5">
                     {carga.remisiones.map((r: string) => (
                       <span
                         key={r}
-                        className="bg-slate-100 border border-slate-300 text-slate-800 text-xs font-bold px-2.5 py-1 rounded-md"
+                        className="inline-flex items-center gap-1 bg-slate-100 border border-slate-300 text-slate-800 text-xs font-bold px-2.5 py-1 rounded-md"
                       >
                         {r}
+                        <button
+                          type="button"
+                          onClick={() => quitarRemisionDeCarga(carga, r)}
+                          title={`Quitar ${r}`}
+                          className="text-slate-400 hover:text-red-600"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
                       </span>
                     ))}
                   </div>
-                )}
+
+                  <div className="flex gap-2 mt-2">
+                    <input
+                      type="text"
+                      placeholder="+ Añadir remisión olvidada..."
+                      value={extraRemision[carga.id] || ''}
+                      onChange={(e) =>
+                        setExtraRemision({ ...extraRemision, [carga.id]: e.target.value })
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          agregarRemisionACarga(carga);
+                        }
+                      }}
+                      className="flex-1 text-sm rounded-lg border border-slate-300 px-3 py-2 uppercase outline-none focus:border-emerald-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => agregarRemisionACarga(carga)}
+                      className="text-xs font-bold bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded-lg"
+                    >
+                      Sumar
+                    </button>
+                  </div>
+                </div>
 
                 <button
                   type="button"
