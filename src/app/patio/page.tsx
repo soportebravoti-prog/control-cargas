@@ -8,7 +8,6 @@ import {
   collection,
   addDoc,
   updateDoc,
-  deleteDoc,
   doc,
   onSnapshot,
   query,
@@ -24,6 +23,9 @@ import {
   Home,
   Pencil,
   Check,
+  History,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 export default function PatioPage() {
@@ -43,7 +45,13 @@ export default function PatioPage() {
   const [editandoDestinoId, setEditandoDestinoId] = useState<string | null>(null);
   const [nuevoDestino, setNuevoDestino] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Estado para el modal de cancelación dentro de la app
+  const [cargaACancelar, setCargaACancelar] = useState<Carga | null>(null);
+  const [motivoCancelacion, setMotivoCancelacion] = useState('');
   const [cancelandoId, setCancelandoId] = useState<string | null>(null);
+
+  const [mostrarCanceladas, setMostrarCanceladas] = useState(false);
 
   useEffect(() => {
     const fechaHoy = new Date().toLocaleDateString('en-CA');
@@ -183,15 +191,30 @@ export default function PatioPage() {
     });
   };
 
-  const cancelarSalida = async (carga: Carga) => {
-    const confirmar = window.confirm(
-      `¿Cancelar la salida de ${carga.unidadNombre} (Vuelta #${carga.vuelta})? Se eliminará del registro y del Monitor.`
-    );
-    if (!confirmar) return;
+  const abrirModalCancelacion = (carga: Carga) => {
+    setCargaACancelar(carga);
+    setMotivoCancelacion('');
+  };
+
+  const cerrarModalCancelacion = () => {
+    if (cancelandoId) return;
+    setCargaACancelar(null);
+    setMotivoCancelacion('');
+  };
+
+  const confirmarCancelacionSalida = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cargaACancelar) return;
 
     try {
-      setCancelandoId(carga.id);
-      await deleteDoc(doc(db, 'cargas', carga.id));
+      setCancelandoId(cargaACancelar.id);
+      await updateDoc(doc(db, 'cargas', cargaACancelar.id), {
+        estado: 'CANCELADA',
+        horaCancelacion: new Date().toISOString(),
+        motivoCancelacion: motivoCancelacion.trim(),
+      });
+      setCargaACancelar(null);
+      setMotivoCancelacion('');
     } finally {
       setCancelandoId(null);
     }
@@ -199,6 +222,7 @@ export default function PatioPage() {
 
   const cargandoAhora = cargasHoy.filter((c) => c.estado === 'CARGANDO');
   const enRutaHoy = cargasHoy.filter((c) => c.estado === 'EN_RUTA');
+  const canceladasHoy = cargasHoy.filter((c) => c.estado === 'CANCELADA');
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 pb-12">
@@ -657,7 +681,7 @@ export default function PatioPage() {
 
                 <button
                   type="button"
-                  onClick={() => cancelarSalida(carga)}
+                  onClick={() => abrirModalCancelacion(carga)}
                   disabled={cancelandoId === carga.id}
                   className="w-full bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-700 border border-red-200 font-bold py-2.5 rounded-xl flex items-center justify-center gap-2 text-sm transition"
                 >
@@ -668,7 +692,162 @@ export default function PatioPage() {
             ))
           )}
         </div>
+
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setMostrarCanceladas(!mostrarCanceladas)}
+            className="w-full px-5 py-4 flex items-center justify-between text-left hover:bg-slate-50 transition"
+          >
+            <div className="flex items-center gap-2">
+              <History className="w-4 h-4 text-slate-500" />
+              <span className="font-bold text-sm text-slate-700">
+                Historial de Cancelaciones Hoy ({canceladasHoy.length})
+              </span>
+            </div>
+            {mostrarCanceladas ? (
+              <ChevronUp className="w-4 h-4 text-slate-500" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-slate-500" />
+            )}
+          </button>
+
+          {mostrarCanceladas && (
+            <div className="px-5 pb-5 pt-1 border-t border-slate-100 space-y-3">
+              {canceladasHoy.length === 0 ? (
+                <p className="text-xs text-slate-400 py-3 text-center">
+                  No hay salidas canceladas hoy.
+                </p>
+              ) : (
+                canceladasHoy.map((carga) => (
+                  <div
+                    key={carga.id}
+                    className="bg-red-50/50 border border-red-200/80 rounded-xl p-3.5 space-y-1.5 text-sm"
+                  >
+                    <div className="flex justify-between items-start gap-2">
+                      <div>
+                        <span className="font-bold text-slate-800">{carga.unidadNombre}</span>{' '}
+                        <span className="text-xs text-slate-500">
+                          • Vuelta #{carga.vuelta} • {carga.choferNombre}
+                        </span>
+                        <div className="text-xs text-slate-600">Destino: {carga.destino}</div>
+                      </div>
+                      <span className="text-xs font-semibold text-red-700 shrink-0">
+                        Cancelada{' '}
+                        {carga.horaCancelacion
+                          ? new Date(carga.horaCancelacion).toLocaleTimeString('es-MX', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })
+                          : ''}
+                      </span>
+                    </div>
+
+                    {carga.motivoCancelacion && (
+                      <p className="text-xs text-red-800 bg-red-100/70 rounded-lg px-2.5 py-1">
+                        Motivo: {carga.motivoCancelacion}
+                      </p>
+                    )}
+
+                    {carga.remisiones.length > 0 && (
+                      <div className="flex flex-wrap gap-1 pt-0.5">
+                        {carga.remisiones.map((r: string) => (
+                          <span
+                            key={r}
+                            className="text-xs bg-white border border-red-200 text-slate-700 px-2 py-0.5 rounded"
+                          >
+                            {r}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Ventana modal integrada dentro de la aplicación */}
+      {cargaACancelar && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-[2px] flex items-center justify-center p-4">
+          <form
+            onSubmit={confirmarCancelacionSalida}
+            className="bg-white border border-slate-200 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden"
+          >
+            <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <img
+                  src="/logo-bravo.png"
+                  alt="Logo Bravo"
+                  className="w-8 h-8 rounded-lg object-contain bg-slate-800 p-1"
+                />
+                <div>
+                  <h3 className="font-bold text-base leading-tight">Cancelar Salida a Ruta</h3>
+                  <p className="text-xs text-slate-300">
+                    {cargaACancelar.unidadNombre} • Vuelta #{cargaACancelar.vuelta}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={cerrarModalCancelacion}
+                disabled={Boolean(cancelandoId)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg transition"
+                title="Cerrar"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-900 space-y-1">
+                <p className="font-bold">
+                  ¿Confirmas cancelar esta salida?
+                </p>
+                <p className="text-red-800">
+                  Chofer: <span className="font-semibold">{cargaACancelar.choferNombre}</span> • Destino:{' '}
+                  <span className="font-semibold">{cargaACancelar.destino}</span>. Saldrá del Monitor, pero quedará en el historial.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Motivo de cancelación (opcional)
+                </label>
+                <input
+                  type="text"
+                  autoFocus
+                  placeholder="Ej. Error de remisión, cambio de unidad..."
+                  value={motivoCancelacion}
+                  onChange={(e) => setMotivoCancelacion(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm text-slate-900 focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={cerrarModalCancelacion}
+                  disabled={Boolean(cancelandoId)}
+                  className="px-4 py-2.5 rounded-xl text-sm font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 transition"
+                >
+                  Volver
+                </button>
+                <button
+                  type="submit"
+                  disabled={Boolean(cancelandoId)}
+                  className="px-4 py-2.5 rounded-xl text-sm font-bold bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white shadow-sm inline-flex items-center gap-1.5 transition"
+                >
+                  <Ban className="w-4 h-4" />
+                  {cancelandoId ? 'Cancelando...' : 'Confirmar Cancelación'}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

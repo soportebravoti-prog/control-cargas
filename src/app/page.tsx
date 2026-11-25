@@ -3,47 +3,67 @@ import { Truck, Monitor, Settings } from 'lucide-react';
 
 export default function Home() {
   return (
-    <main className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6">
-      <div className="max-w-xl w-full space-y-6 text-center">
+    <main className="relative min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 overflow-hidden">
+      <video
+        src="/video-patio.mp4"
+        autoPlay
+        loop
+        muted
+        playsInline
+        className="absolute inset-0 w-full h-full object-cover opacity-55 pointer-events-none"
+      />
+      <div className="absolute inset-0 bg-slate-950/45 pointer-events-none" />
+
+      <div className="relative z-10 max-w-xl w-full space-y-6 text-center">
         <img
           src="/logo-bravo.png"
           alt="Logo Bravo Control de Cargas"
-          className="w-24 h-24 mx-auto rounded-2xl object-contain bg-slate-900 p-2 border border-slate-800 shadow-lg"
+          className="w-24 h-24 mx-auto rounded-2xl object-contain bg-slate-900/90 p-2 border border-slate-700 shadow-lg"
         />
-        <h1 className="text-3xl font-bold tracking-tight">Control de Carga y Despacho</h1>
-        <p className="text-slate-400">Selecciona la pantalla según tu área de trabajo</p>
+        <h1 className="text-3xl font-bold tracking-tight drop-shadow">
+          Control de Carga y Despacho
+        </h1>
+        <p className="text-slate-200 drop-shadow">
+          Selecciona la pantalla según tu área de trabajo
+        </p>
 
-        <div className="grid gap-4 pt-4">
+        <div className="grid gap-4 pt-2">
           <Link
             href="/patio"
-            className="flex items-center gap-4 p-5 bg-amber-600 hover:bg-amber-500 rounded-xl transition text-left shadow-lg"
+            className="flex items-center gap-4 p-5 bg-amber-600/95 hover:bg-amber-500 rounded-xl transition text-left shadow-lg"
           >
             <Truck className="w-10 h-10 shrink-0" />
             <div>
               <div className="text-xl font-bold">Patio / Encargado (Abajo)</div>
-              <div className="text-sm text-amber-100">Registrar unidades cargando, remisiones y salidas</div>
+              <div className="text-sm text-amber-100">
+                Registrar unidades cargando, remisiones y salidas
+              </div>
             </div>
           </Link>
 
           <Link
             href="/monitor"
-            className="flex items-center gap-4 p-5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl transition text-left shadow-lg"
+            className="flex items-center gap-4 p-5 bg-slate-900/85 hover:bg-slate-800/90 border border-slate-700 rounded-xl transition text-left shadow-lg backdrop-blur-[2px]"
           >
             <Monitor className="w-10 h-10 text-emerald-400 shrink-0" />
             <div>
               <div className="text-xl font-bold">Monitor Administración (Arriba)</div>
-              <div className="text-sm text-slate-300">Tablero en tiempo real y búsqueda por remisión</div>
+              <div className="text-sm text-slate-300">
+                Tablero en tiempo real y búsqueda por remisión
+              </div>
             </div>
           </Link>
 
           <Link
             href="/catalogos"
-            className="flex items-center gap-4 p-4 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl transition text-left"
+            className="flex items-center gap-4 p-4 bg-slate-950/80 hover:bg-slate-900/90 border border-slate-800 rounded-xl transition text-left backdrop-blur-[2px]"
           >
             <Settings className="w-7 h-7 text-slate-400 shrink-0" />
             <div>
               <div className="font-semibold">Catálogos y Reporte Diario</div>
-              <div className="text-xs text-slate-400">Administrar unidades, choferes y descargar Excel del día</div>
+              <div className="text-xs text-slate-400">
+                Administrar unidades, choferes y descargar Excel del día
+              </div>
             </div>
           </Link>
         </div>

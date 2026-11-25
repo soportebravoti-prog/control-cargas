@@ -34,8 +34,10 @@ export interface Carga {
   destino: string;
   remisiones: string[];
   vuelta: number;
-  estado: 'CARGANDO' | 'EN_RUTA';
-  horaInicio: string; // ISO string
-  horaSalida: string | null; // ISO string o null
-  fechaOperacion: string; // YYYY-MM-DD
+  estado: 'CARGANDO' | 'EN_RUTA' | 'CANCELADA';
+  horaInicio: string;
+  horaSalida: string | null;
+  horaCancelacion?: string | null;
+  motivoCancelacion?: string;
+  fechaOperacion: string;
 }
