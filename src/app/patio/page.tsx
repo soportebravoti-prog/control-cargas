@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { db, Unidad, Chofer, Carga } from '@/lib/firebase';
 import { descargarCargasCSV } from '@/lib/exportarCargas';
 import {
@@ -13,7 +14,7 @@ import {
   query,
   where,
 } from 'firebase/firestore';
-import { Plus, X, CheckCircle2, PackagePlus, Download, Ban } from 'lucide-react';
+import { Plus, X, CheckCircle2, PackagePlus, Download, Ban, Home } from 'lucide-react';
 
 export default function PatioPage() {
   const [unidades, setUnidades] = useState<Unidad[]>([]);
@@ -166,16 +167,23 @@ export default function PatioPage() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 pb-12">
-      <header className="bg-slate-900 text-white px-4 py-3.5 shadow sticky top-0 z-10 flex items-center justify-between">
+      <header className="bg-slate-900 text-white px-4 py-3.5 shadow sticky top-0 z-10 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2.5">
+          <Link
+            href="/"
+            title="Volver al menú principal"
+            className="bg-slate-800 hover:bg-slate-700 p-2 rounded-lg text-slate-200 transition"
+          >
+            <Home className="w-5 h-5" />
+          </Link>
           <img
             src="/logo-bravo.png"
             alt="Logo Bravo"
             className="w-9 h-9 rounded-lg object-contain bg-slate-800 p-1"
           />
-          <h1 className="font-bold text-lg">Patio — Registro de Carga</h1>
+          <h1 className="font-bold text-base sm:text-lg">Patio — Registro</h1>
         </div>
-        <span className="text-xs bg-slate-800 px-2.5 py-1 rounded-full text-slate-300">
+        <span className="text-xs bg-slate-800 px-2.5 py-1 rounded-full text-slate-300 shrink-0">
           {cargandoAhora.length} en patio • {enRutaHoy.length} en ruta
         </span>
       </header>

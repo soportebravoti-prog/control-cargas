@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { db, Carga } from '@/lib/firebase';
 import { descargarCargasCSV } from '@/lib/exportarCargas';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
-import { Search, Truck, CheckCircle, Clock, Settings, Radio, Download } from 'lucide-react';
+import { Search, Truck, CheckCircle, Clock, Settings, Radio, Download, Home } from 'lucide-react';
 
 export default function MonitorPage() {
   const [cargas, setCargas] = useState<Carga[]>([]);
@@ -115,10 +115,10 @@ export default function MonitorPage() {
           <span className="font-mono text-lg font-semibold text-slate-300">{horaActual}</span>
 
           <Link
-            href="/catalogos"
+            href="/"
             className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 px-3 py-2 rounded-xl text-xs font-semibold transition"
           >
-            <Settings className="w-4 h-4" /> Catálogos
+            <Home className="w-4 h-4" /> Inicio
           </Link>
         </div>
       </header>
