@@ -71,6 +71,11 @@ export default function MonitorPage() {
     <div className="min-h-screen bg-slate-950 text-white flex flex-col">
       <header className="bg-slate-900 border-b border-slate-800 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
+          <img
+            src="/logo-bravo.png"
+            alt="Logo Bravo"
+            className="w-10 h-10 rounded-xl object-contain bg-slate-800 p-1 border border-slate-700"
+          />
           <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 px-3 py-1 rounded-full text-xs font-bold">
             <Radio className="w-3.5 h-3.5 animate-pulse" /> EN VIVO
           </div>

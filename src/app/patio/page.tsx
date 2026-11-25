@@ -7,12 +7,13 @@ import {
   collection,
   addDoc,
   updateDoc,
+  deleteDoc,
   doc,
   onSnapshot,
   query,
   where,
 } from 'firebase/firestore';
-import { Plus, Truck, X, CheckCircle2, PackagePlus, Download } from 'lucide-react';
+import { Plus, X, CheckCircle2, PackagePlus, Download, Ban } from 'lucide-react';
 
 export default function PatioPage() {
   const [unidades, setUnidades] = useState<Unidad[]>([]);
@@ -29,6 +30,7 @@ export default function PatioPage() {
   const [remisiones, setRemisiones] = useState<string[]>([]);
   const [extraRemision, setExtraRemision] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
+  const [cancelandoId, setCancelandoId] = useState<string | null>(null);
 
   useEffect(() => {
     const fechaHoy = new Date().toLocaleDateString('en-CA');
@@ -145,17 +147,36 @@ export default function PatioPage() {
     });
   };
 
+  const cancelarSalida = async (carga: Carga) => {
+    const confirmar = window.confirm(
+      `¿Cancelar la salida de ${carga.unidadNombre} (Vuelta #${carga.vuelta})? Se eliminará del registro y del Monitor.`
+    );
+    if (!confirmar) return;
+
+    try {
+      setCancelandoId(carga.id);
+      await deleteDoc(doc(db, 'cargas', carga.id));
+    } finally {
+      setCancelandoId(null);
+    }
+  };
+
   const cargandoAhora = cargasHoy.filter((c) => c.estado === 'CARGANDO');
+  const enRutaHoy = cargasHoy.filter((c) => c.estado === 'EN_RUTA');
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 pb-12">
-      <header className="bg-slate-900 text-white px-4 py-4 shadow sticky top-0 z-10 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Truck className="w-6 h-6 text-amber-400" />
+      <header className="bg-slate-900 text-white px-4 py-3.5 shadow sticky top-0 z-10 flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <img
+            src="/logo-bravo.png"
+            alt="Logo Bravo"
+            className="w-9 h-9 rounded-lg object-contain bg-slate-800 p-1"
+          />
           <h1 className="font-bold text-lg">Patio — Registro de Carga</h1>
         </div>
         <span className="text-xs bg-slate-800 px-2.5 py-1 rounded-full text-slate-300">
-          {cargandoAhora.length} en patio
+          {cargandoAhora.length} en patio • {enRutaHoy.length} en ruta
         </span>
       </header>
 
@@ -186,7 +207,10 @@ export default function PatioPage() {
           </div>
         </div>
 
-        <form onSubmit={iniciarCarga} className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-4">
+        <form
+          onSubmit={iniciarCarga}
+          className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-4"
+        >
           <div className="flex items-center justify-between">
             <h2 className="font-bold text-base text-slate-800">1. Iniciar Nueva Carga</h2>
             {unidadSeleccionada && (
@@ -386,6 +410,81 @@ export default function PatioPage() {
                 >
                   <CheckCircle2 className="w-5 h-5" />
                   Listo / Salió a Ruta
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="space-y-3">
+          <h2 className="font-bold text-base text-slate-800 px-1">
+            3. En Ruta Hoy ({enRutaHoy.length})
+          </h2>
+
+          {enRutaHoy.length === 0 ? (
+            <div className="bg-white rounded-2xl p-8 text-center text-slate-400 border border-dashed border-slate-300">
+              No hay unidades despachadas hoy.
+            </div>
+          ) : (
+            enRutaHoy.map((carga) => (
+              <div
+                key={carga.id}
+                className="bg-white rounded-2xl p-5 shadow-sm border-l-4 border-l-emerald-500 border border-slate-200 space-y-3"
+              >
+                <div className="flex justify-between items-start gap-2">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-lg text-slate-900">{carga.unidadNombre}</span>
+                      <span className="text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded">
+                        Vuelta #{carga.vuelta}
+                      </span>
+                    </div>
+                    <p className="text-sm text-slate-600 font-medium">
+                      Chofer: <span className="text-slate-900">{carga.choferNombre}</span> • Destino:{' '}
+                      <span className="text-slate-900">{carga.destino}</span>
+                    </p>
+                  </div>
+                  <div className="text-right text-xs text-slate-500">
+                    <div>
+                      Cargó:{' '}
+                      {new Date(carga.horaInicio).toLocaleTimeString('es-MX', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </div>
+                    <div className="text-emerald-700 font-bold">
+                      Salió:{' '}
+                      {carga.horaSalida
+                        ? new Date(carga.horaSalida).toLocaleTimeString('es-MX', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })
+                        : '--:--'}
+                    </div>
+                  </div>
+                </div>
+
+                {carga.remisiones.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {carga.remisiones.map((r: string) => (
+                      <span
+                        key={r}
+                        className="bg-slate-100 border border-slate-300 text-slate-800 text-xs font-bold px-2.5 py-1 rounded-md"
+                      >
+                        {r}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => cancelarSalida(carga)}
+                  disabled={cancelandoId === carga.id}
+                  className="w-full bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-700 border border-red-200 font-bold py-2.5 rounded-xl flex items-center justify-center gap-2 text-sm transition"
+                >
+                  <Ban className="w-4 h-4" />
+                  {cancelandoId === carga.id ? 'Cancelando...' : 'Cancelar Salida'}
                 </button>
               </div>
             ))

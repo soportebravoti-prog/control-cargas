@@ -5,6 +5,11 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6">
       <div className="max-w-xl w-full space-y-6 text-center">
+        <img
+          src="/logo-bravo.png"
+          alt="Logo Bravo Control de Cargas"
+          className="w-24 h-24 mx-auto rounded-2xl object-contain bg-slate-900 p-2 border border-slate-800 shadow-lg"
+        />
         <h1 className="text-3xl font-bold tracking-tight">Control de Carga y Despacho</h1>
         <p className="text-slate-400">Selecciona la pantalla según tu área de trabajo</p>
 
