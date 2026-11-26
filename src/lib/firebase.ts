@@ -84,7 +84,8 @@ export interface Chofer {
   vencimientoLicencia?: string;
   unidadAsignadaId?: string;
   notas?: string;
-  // Fotos de documentos (Data URL comprimida)
+  // Foto de perfil (rostro) y documentos
+  fotoPerfil?: string;
   fotoLicenciaFrente?: string;
   fotoLicenciaReverso?: string;
   fotoIneFrente?: string;

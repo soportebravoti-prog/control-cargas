@@ -27,6 +27,7 @@ import {
   Camera,
   Trash2,
   ZoomIn,
+  Upload,
 } from 'lucide-react';
 
 type EstadoVigencia = 'SIN_FECHA' | 'VIGENTE' | 'POR_VENCER' | 'VENCIDA';
@@ -113,6 +114,13 @@ function choferTienePendientes(c: Chofer): boolean {
     !c.numeroLicencia?.trim() ||
     !c.vencimientoLicencia?.trim()
   );
+}
+
+function obtenerIniciales(nombre: string): string {
+  const partes = nombre.trim().split(/\s+/).filter(Boolean);
+  if (partes.length === 0) return 'CH';
+  if (partes.length === 1) return partes[0].slice(0, 2).toUpperCase();
+  return `${partes[0][0]}${partes[1][0]}`.toUpperCase();
 }
 
 function comprimirImagen(file: File, maxDim = 900, calidad = 0.72): Promise<string> {
@@ -299,11 +307,13 @@ export default function FlotaPage() {
     vencimientoLicencia: '',
     unidadAsignadaId: '',
     notas: '',
+    fotoPerfil: '',
     fotoLicenciaFrente: '',
     fotoLicenciaReverso: '',
     fotoIneFrente: '',
     fotoIneReverso: '',
   });
+  const [procesandoPerfil, setProcesandoPerfil] = useState(false);
   const [guardandoChofer, setGuardandoChofer] = useState(false);
 
   useEffect(() => {
@@ -391,11 +401,25 @@ export default function FlotaPage() {
       vencimientoLicencia: c.vencimientoLicencia || '',
       unidadAsignadaId: c.unidadAsignadaId || '',
       notas: c.notas || '',
+      fotoPerfil: c.fotoPerfil || '',
       fotoLicenciaFrente: c.fotoLicenciaFrente || '',
       fotoLicenciaReverso: c.fotoLicenciaReverso || '',
       fotoIneFrente: c.fotoIneFrente || '',
       fotoIneReverso: c.fotoIneReverso || '',
     });
+  };
+
+  const handleFotoPerfilArchivo = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setProcesandoPerfil(true);
+      const comprimida = await comprimirImagen(file, 600, 0.78);
+      setFormChofer((prev) => ({ ...prev, fotoPerfil: comprimida }));
+    } finally {
+      setProcesandoPerfil(false);
+      e.target.value = '';
+    }
   };
 
   const guardarChofer = async (e: React.FormEvent) => {
@@ -411,6 +435,7 @@ export default function FlotaPage() {
         vencimientoLicencia: formChofer.vencimientoLicencia,
         unidadAsignadaId: formChofer.unidadAsignadaId,
         notas: formChofer.notas.trim(),
+        fotoPerfil: formChofer.fotoPerfil,
         fotoLicenciaFrente: formChofer.fotoLicenciaFrente,
         fotoLicenciaReverso: formChofer.fotoLicenciaReverso,
         fotoIneFrente: formChofer.fotoIneFrente,
@@ -913,16 +938,57 @@ export default function FlotaPage() {
                     }`}
                   >
                     <div className="space-y-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <h2 className="text-lg font-bold">{c.nombre}</h2>
-                          <p
-                            className={`text-xs mt-0.5 ${
-                              esOscuro ? 'text-slate-400' : 'text-slate-500'
-                            }`}
-                          >
-                            Tel: {c.telefono || 'Sin teléfono'}
-                          </p>
+                      {/* Encabezado de tarjeta con foto de rostro al lado del nombre */}
+                      <div className="flex items-start justify-between gap-2.5">
+                        <div className="flex items-center gap-3 min-w-0">
+                          {c.fotoPerfil ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setFotoAmpliada({
+                                  titulo: `Foto de perfil — ${c.nombre}`,
+                                  src: c.fotoPerfil!,
+                                })
+                              }
+                              title="Ver foto en grande"
+                              className="w-14 h-14 rounded-full overflow-hidden border-2 border-amber-500/70 shadow shrink-0 group relative"
+                            >
+                              <img
+                                src={c.fotoPerfil}
+                                alt={c.nombre}
+                                className="w-full h-full object-cover group-hover:scale-105 transition"
+                              />
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => abrirModalChofer(c)}
+                              title="Agregar foto de rostro"
+                              className={`w-14 h-14 rounded-full border-2 border-dashed flex flex-col items-center justify-center shrink-0 transition ${
+                                esOscuro
+                                  ? 'bg-slate-800/80 border-slate-700 text-slate-300 hover:border-amber-500'
+                                  : 'bg-slate-100 border-slate-300 text-slate-600 hover:border-amber-500'
+                              }`}
+                            >
+                              <span className="text-xs font-extrabold leading-none">
+                                {obtenerIniciales(c.nombre)}
+                              </span>
+                              <Camera className="w-3 h-3 mt-0.5 text-amber-500" />
+                            </button>
+                          )}
+
+                          <div className="min-w-0">
+                            <h2 className="text-base sm:text-lg font-bold leading-snug break-words">
+                              {c.nombre}
+                            </h2>
+                            <p
+                              className={`text-xs mt-0.5 ${
+                                esOscuro ? 'text-slate-400' : 'text-slate-500'
+                              }`}
+                            >
+                              Tel: {c.telefono || 'Sin teléfono'}
+                            </p>
+                          </div>
                         </div>
 
                         {incompleto ? (
@@ -1366,7 +1432,7 @@ export default function FlotaPage() {
                   Datos y Documentos — {choferEditando.nombre}
                 </h3>
                 <p className={`text-xs ${esOscuro ? 'text-slate-400' : 'text-slate-500'}`}>
-                  Sube fotos de Licencia e INE (frente y reverso) y completa sus datos
+                  Toma foto de perfil, sube Licencia e INE y completa sus datos
                 </p>
               </div>
               <button
@@ -1379,6 +1445,91 @@ export default function FlotaPage() {
             </div>
 
             <div className="p-5 space-y-4 max-h-[78vh] overflow-y-auto text-sm">
+              {/* Foto de rostro / perfil del chofer */}
+              <div
+                className={`border rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-4 ${
+                  esOscuro
+                    ? 'bg-slate-950/80 border-slate-800'
+                    : 'bg-slate-50 border-slate-200'
+                }`}
+              >
+                <div className="flex items-center gap-3.5">
+                  {formChofer.fotoPerfil ? (
+                    <div className="relative">
+                      <img
+                        src={formChofer.fotoPerfil}
+                        alt="Foto del chofer"
+                        className="w-16 h-16 rounded-full object-cover border-2 border-amber-500 shadow"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setFormChofer({ ...formChofer, fotoPerfil: '' })}
+                        title="Quitar foto de perfil"
+                        className="absolute -top-1 -right-1 bg-rose-600 text-white p-1 rounded-full shadow hover:bg-rose-500"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div
+                      className={`w-16 h-16 rounded-full border-2 border-dashed flex items-center justify-center font-extrabold text-sm ${
+                        esOscuro
+                          ? 'bg-slate-900 border-slate-700 text-slate-400'
+                          : 'bg-white border-slate-300 text-slate-500'
+                      }`}
+                    >
+                      {obtenerIniciales(choferEditando.nombre)}
+                    </div>
+                  )}
+
+                  <div>
+                    <p
+                      className={`text-xs font-bold uppercase tracking-wide ${
+                        esOscuro ? 'text-amber-300' : 'text-amber-700'
+                      }`}
+                    >
+                      Foto de perfil (rostro)
+                    </p>
+                    <p className={`text-xs ${esOscuro ? 'text-slate-400' : 'text-slate-500'}`}>
+                      Aparece junto al nombre en la tarjeta del chofer
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <label className="px-3 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white cursor-pointer inline-flex items-center gap-1.5 shadow-sm transition">
+                    <Camera className="w-4 h-4" />
+                    <span>{procesandoPerfil ? 'Procesando...' : 'Tomar foto'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="user"
+                      onChange={handleFotoPerfilArchivo}
+                      disabled={procesandoPerfil}
+                      className="hidden"
+                    />
+                  </label>
+
+                  <label
+                    className={`px-3 py-2 rounded-xl text-xs font-bold border cursor-pointer inline-flex items-center gap-1.5 transition ${
+                      esOscuro
+                        ? 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
+                        : 'bg-white hover:bg-slate-100 border-slate-300 text-slate-800'
+                    }`}
+                  >
+                    <Upload className="w-4 h-4" />
+                    <span>Subir</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleFotoPerfilArchivo}
+                      disabled={procesandoPerfil}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+              </div>
+
               <div>
                 <label
                   className={`block text-xs font-bold uppercase tracking-wide mb-2 ${
