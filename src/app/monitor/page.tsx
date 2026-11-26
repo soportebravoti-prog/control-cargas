@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { db, Carga } from '@/lib/firebase';
 import { descargarCargasCSV } from '@/lib/exportarCargas';
+import { DesbloqueoAudioModal } from '@/components/DesbloqueoAudioModal';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
   Search,
@@ -46,6 +47,41 @@ export default function MonitorPage() {
   const [descargando, setDescargando] = useState(false);
   const [horaActual, setHoraActual] = useState('');
 
+  const audioCargandoRef = useRef<HTMLAudioElement | null>(null);
+  const audioSalidaRef = useRef<HTMLAudioElement | null>(null);
+  const estadosPreviosRef = useRef<Record<string, Carga['estado']>>({});
+  const cargaInicialRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    audioCargandoRef.current = new Audio('/sonido-cargando.mp3');
+    audioSalidaRef.current = new Audio('/sonido-salida.mp3');
+  }, []);
+
+  const desbloquearAudios = () => {
+    [audioCargandoRef.current, audioSalidaRef.current].forEach((audio) => {
+      if (!audio) return;
+      audio.volume = 0;
+      audio
+        .play()
+        .then(() => {
+          audio.pause();
+          audio.currentTime = 0;
+          audio.volume = 1;
+        })
+        .catch(() => {
+          audio.volume = 1;
+        });
+    });
+  };
+
+  const reproducirTono = (tipo: 'CARGANDO' | 'SALIDA') => {
+    const audio = tipo === 'CARGANDO' ? audioCargandoRef.current : audioSalidaRef.current;
+    if (!audio) return;
+    audio.volume = 1;
+    audio.currentTime = 0;
+    audio.play().catch(() => {});
+  };
+
   useEffect(() => {
     const actualizarHora = () => {
       setHoraActual(
@@ -69,10 +105,61 @@ export default function MonitorPage() {
   useEffect(() => {
     if (!hoy) return;
 
+    cargaInicialRef.current = true;
+    if (estadosPreviosRef && typeof estadosPreviosRef === 'object') {
+      estadosPreviosRef.current = {};
+    }
+
     const q = query(collection(db, 'cargas'), where('fechaOperacion', '==', hoy));
     const unsub = onSnapshot(q, (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Carga));
       list.sort((a, b) => b.horaInicio.localeCompare(a.horaInicio));
+
+      const mapaActual =
+        estadosPreviosRef &&
+        typeof estadosPreviosRef === 'object' &&
+        estadosPreviosRef.current &&
+        typeof estadosPreviosRef.current === 'object'
+          ? estadosPreviosRef.current
+          : {};
+
+      if (cargaInicialRef.current) {
+        const snapshotInicial: Record<string, Carga['estado']> = {};
+        list.forEach((c) => {
+          snapshotInicial[c.id] = c.estado;
+        });
+        if (estadosPreviosRef && typeof estadosPreviosRef === 'object') {
+          estadosPreviosRef.current = snapshotInicial;
+        }
+        cargaInicialRef.current = false;
+      } else {
+        let huboNuevaCarga = false;
+        let huboNuevaSalida = false;
+
+        list.forEach((c) => {
+          const previo = mapaActual[c.id];
+          if (!previo && c.estado === 'CARGANDO') {
+            huboNuevaCarga = true;
+          } else if (previo && previo !== 'EN_RUTA' && c.estado === 'EN_RUTA') {
+            huboNuevaSalida = true;
+          }
+        });
+
+        const siguienteMapa: Record<string, Carga['estado']> = {};
+        list.forEach((c) => {
+          siguienteMapa[c.id] = c.estado;
+        });
+        if (estadosPreviosRef && typeof estadosPreviosRef === 'object') {
+          estadosPreviosRef.current = siguienteMapa;
+        }
+
+        if (huboNuevaSalida) {
+          reproducirTono('SALIDA');
+        } else if (huboNuevaCarga) {
+          reproducirTono('CARGANDO');
+        }
+      }
+
       setCargas(list);
     });
 
@@ -171,7 +258,6 @@ export default function MonitorPage() {
       </header>
 
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Columna 1: Cargando en patio */}
         <section className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
             <div className="flex items-center gap-2.5">
@@ -258,7 +344,6 @@ export default function MonitorPage() {
           )}
         </section>
 
-        {/* Columna 2: En ruta hoy */}
         <section className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
             <div className="flex items-center gap-2.5">
@@ -337,6 +422,13 @@ export default function MonitorPage() {
           )}
         </section>
       </main>
+
+      <DesbloqueoAudioModal
+        titulo="Monitor de Operaciones"
+        subtitulo="Conecta la sesión en tiempo real para recibir alertas visuales y sonoras de patio."
+        textoBoton="Conectar Tablero en Vivo"
+        onDesbloquear={desbloquearAudios}
+      />
     </div>
   );
 }

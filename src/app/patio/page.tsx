@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { db, Unidad, Chofer, Carga } from '@/lib/firebase';
 import { descargarCargasCSV } from '@/lib/exportarCargas';
+import { DesbloqueoAudioModal } from '@/components/DesbloqueoAudioModal';
 import {
   collection,
   addDoc,
@@ -46,12 +47,48 @@ export default function PatioPage() {
   const [nuevoDestino, setNuevoDestino] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Estado para el modal de cancelación dentro de la app
+  // Modal de cancelación integrado
   const [cargaACancelar, setCargaACancelar] = useState<Carga | null>(null);
   const [motivoCancelacion, setMotivoCancelacion] = useState('');
   const [cancelandoId, setCancelandoId] = useState<string | null>(null);
 
   const [mostrarCanceladas, setMostrarCanceladas] = useState(false);
+
+  // Alertas sonoras en Patio
+  const audioCargandoRef = useRef<HTMLAudioElement | null>(null);
+  const audioSalidaRef = useRef<HTMLAudioElement | null>(null);
+  const estadosPreviosRef = useRef<Record<string, Carga['estado']>>({});
+  const cargaInicialRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    audioCargandoRef.current = new Audio('/sonido-cargando.mp3');
+    audioSalidaRef.current = new Audio('/sonido-salida.mp3');
+  }, []);
+
+  const desbloquearAudios = () => {
+    [audioCargandoRef.current, audioSalidaRef.current].forEach((audio) => {
+      if (!audio) return;
+      audio.volume = 0;
+      audio
+        .play()
+        .then(() => {
+          audio.pause();
+          audio.currentTime = 0;
+          audio.volume = 1;
+        })
+        .catch(() => {
+          audio.volume = 1;
+        });
+    });
+  };
+
+  const reproducirTono = (tipo: 'CARGANDO' | 'SALIDA') => {
+    const audio = tipo === 'CARGANDO' ? audioCargandoRef.current : audioSalidaRef.current;
+    if (!audio) return;
+    audio.volume = 1;
+    audio.currentTime = 0;
+    audio.play().catch(() => {});
+  };
 
   useEffect(() => {
     const fechaHoy = new Date().toLocaleDateString('en-CA');
@@ -61,6 +98,11 @@ export default function PatioPage() {
 
   useEffect(() => {
     if (!hoy) return;
+
+    cargaInicialRef.current = true;
+    if (estadosPreviosRef && typeof estadosPreviosRef === 'object') {
+      estadosPreviosRef.current = {};
+    }
 
     const qUnidades = query(collection(db, 'unidades'), where('activo', '==', true));
     const qChoferes = query(collection(db, 'choferes'), where('activo', '==', true));
@@ -81,6 +123,52 @@ export default function PatioPage() {
     const unsubCa = onSnapshot(qCargas, (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Carga));
       list.sort((a, b) => b.horaInicio.localeCompare(a.horaInicio));
+
+      const mapaActual =
+        estadosPreviosRef &&
+        typeof estadosPreviosRef === 'object' &&
+        estadosPreviosRef.current &&
+        typeof estadosPreviosRef.current === 'object'
+          ? estadosPreviosRef.current
+          : {};
+
+      if (cargaInicialRef.current) {
+        const snapshotInicial: Record<string, Carga['estado']> = {};
+        list.forEach((c) => {
+          snapshotInicial[c.id] = c.estado;
+        });
+        if (estadosPreviosRef && typeof estadosPreviosRef === 'object') {
+          estadosPreviosRef.current = snapshotInicial;
+        }
+        cargaInicialRef.current = false;
+      } else {
+        let huboNuevaCarga = false;
+        let huboNuevaSalida = false;
+
+        list.forEach((c) => {
+          const previo = mapaActual[c.id];
+          if (!previo && c.estado === 'CARGANDO') {
+            huboNuevaCarga = true;
+          } else if (previo && previo !== 'EN_RUTA' && c.estado === 'EN_RUTA') {
+            huboNuevaSalida = true;
+          }
+        });
+
+        const siguienteMapa: Record<string, Carga['estado']> = {};
+        list.forEach((c) => {
+          siguienteMapa[c.id] = c.estado;
+        });
+        if (estadosPreviosRef && typeof estadosPreviosRef === 'object') {
+          estadosPreviosRef.current = siguienteMapa;
+        }
+
+        if (huboNuevaSalida) {
+          reproducirTono('SALIDA');
+        } else if (huboNuevaCarga) {
+          reproducirTono('CARGANDO');
+        }
+      }
+
       setCargasHoy(list);
     });
 
@@ -769,7 +857,6 @@ export default function PatioPage() {
         </div>
       </div>
 
-      {/* Ventana modal integrada dentro de la aplicación */}
       {cargaACancelar && (
         <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-[2px] flex items-center justify-center p-4">
           <form
@@ -803,12 +890,11 @@ export default function PatioPage() {
 
             <div className="p-5 space-y-4">
               <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-900 space-y-1">
-                <p className="font-bold">
-                  ¿Confirmas cancelar esta salida?
-                </p>
+                <p className="font-bold">¿Confirmas cancelar esta salida?</p>
                 <p className="text-red-800">
-                  Chofer: <span className="font-semibold">{cargaACancelar.choferNombre}</span> • Destino:{' '}
-                  <span className="font-semibold">{cargaACancelar.destino}</span>. Saldrá del Monitor, pero quedará en el historial.
+                  Chofer: <span className="font-semibold">{cargaACancelar.choferNombre}</span> •
+                  Destino: <span className="font-semibold">{cargaACancelar.destino}</span>. Saldrá
+                  del Monitor, pero quedará en el historial.
                 </p>
               </div>
 
@@ -848,6 +934,13 @@ export default function PatioPage() {
           </form>
         </div>
       )}
+
+      <DesbloqueoAudioModal
+        titulo="Control de Patio"
+        subtitulo="Confirma tu ingreso para sincronizar registros y alertas de salida en tiempo real."
+        textoBoton="Iniciar Operación"
+        onDesbloquear={desbloquearAudios}
+      />
     </div>
   );
 }
