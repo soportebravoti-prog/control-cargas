@@ -42,3 +42,10 @@ export interface Carga {
   motivoCancelacion?: string;
   fechaOperacion: string;
 }
+export interface Aviso {
+  id: string;
+  texto: string;
+  activo: boolean;
+  creadoEn: string;
+  fechaOperacion: string;
+}
