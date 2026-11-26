@@ -49,3 +49,44 @@ export interface Aviso {
   creadoEn: string;
   fechaOperacion: string;
 }
+
+export interface Unidad {
+  id: string;
+  nombre: string;
+  activo: boolean;
+  choferDefaultId?: string;
+  tipoUnidad?: string;
+  placas?: string;
+  serieVin?: string;
+  marcaModelo?: string;
+  anio?: string;
+  estatusOperativo?: 'ACTIVA' | 'MANTENIMIENTO';
+  aseguradora?: string;
+  polizaSeguro?: string;
+  vencimientoSeguro?: string;
+  tarjetaCirculacion?: string;
+  vencimientoTarjeta?: string;
+  notas?: string;
+  // Fotos de la unidad (Data URL comprimida)
+  fotoFrente?: string;
+  fotoTrasero?: string;
+  fotoCostadoIzq?: string;
+  fotoCostadoDer?: string;
+}
+
+export interface Chofer {
+  id: string;
+  nombre: string;
+  activo: boolean;
+  telefono?: string;
+  numeroLicencia?: string;
+  tipoLicencia?: string;
+  vencimientoLicencia?: string;
+  unidadAsignadaId?: string;
+  notas?: string;
+  // Fotos de documentos (Data URL comprimida)
+  fotoLicenciaFrente?: string;
+  fotoLicenciaReverso?: string;
+  fotoIneFrente?: string;
+  fotoIneReverso?: string;
+}
