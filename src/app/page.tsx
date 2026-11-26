@@ -3,7 +3,14 @@
 import Link from 'next/link';
 import { PanelAvisos } from '@/components/PanelAvisos';
 import { BotonTema, useTemaApp } from '@/components/BotonTema';
-import { Truck, Monitor, Settings, Car, ChevronRight } from 'lucide-react';
+import {
+  Truck,
+  Monitor,
+  Settings,
+  Car,
+  UserCheck,
+  ChevronRight,
+} from 'lucide-react';
 
 export default function HomePage() {
   const tema = useTemaApp();
@@ -96,7 +103,7 @@ export default function HomePage() {
             </Link>
 
             <Link
-              href="/monitor"
+              href="/chofer"
               className={`group w-full border rounded-2xl p-4 sm:p-5 shadow transition flex items-center justify-between gap-4 ${
                 esOscuro
                   ? 'bg-slate-900/90 hover:bg-slate-800/90 text-white border-slate-700/80'
@@ -111,6 +118,44 @@ export default function HomePage() {
                       : 'bg-emerald-50 border-emerald-200 text-emerald-600'
                   }`}
                 >
+                  <UserCheck className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="font-bold text-base sm:text-lg leading-tight">
+                    Portal del Chofer
+                  </div>
+                  <div
+                    className={`text-xs sm:text-sm mt-0.5 ${
+                      esOscuro ? 'text-slate-300' : 'text-slate-600'
+                    }`}
+                  >
+                    Iniciar y finalizar ruta, niveles de unidad y carga de gasolina
+                  </div>
+                </div>
+              </div>
+              <ChevronRight
+                className={`w-5 h-5 group-hover:translate-x-1 transition shrink-0 ${
+                  esOscuro ? 'text-slate-400' : 'text-slate-500'
+                }`}
+              />
+            </Link>
+
+            <Link
+              href="/monitor"
+              className={`group w-full border rounded-2xl p-4 sm:p-5 shadow transition flex items-center justify-between gap-4 ${
+                esOscuro
+                  ? 'bg-slate-900/90 hover:bg-slate-800/90 text-white border-slate-700/80'
+                  : 'bg-white/95 hover:bg-slate-50 text-slate-900 border-slate-200'
+              }`}
+            >
+              <div className="flex items-center gap-4">
+                <div
+                  className={`p-3 rounded-xl border ${
+                    esOscuro
+                      ? 'bg-slate-800 border-slate-700 text-teal-400'
+                      : 'bg-teal-50 border-teal-200 text-teal-600'
+                  }`}
+                >
                   <Monitor className="w-6 h-6" />
                 </div>
                 <div>
@@ -123,44 +168,6 @@ export default function HomePage() {
                     }`}
                   >
                     Tablero en tiempo real y búsqueda por remisión
-                  </div>
-                </div>
-              </div>
-              <ChevronRight
-                className={`w-5 h-5 group-hover:translate-x-1 transition shrink-0 ${
-                  esOscuro ? 'text-slate-400' : 'text-slate-500'
-                }`}
-              />
-            </Link>
-
-            <Link
-              href="/catalogos"
-              className={`group w-full border rounded-2xl p-4 sm:p-5 shadow transition flex items-center justify-between gap-4 ${
-                esOscuro
-                  ? 'bg-slate-900/90 hover:bg-slate-800/90 text-white border-slate-700/80'
-                  : 'bg-white/95 hover:bg-slate-50 text-slate-900 border-slate-200'
-              }`}
-            >
-              <div className="flex items-center gap-4">
-                <div
-                  className={`p-3 rounded-xl border ${
-                    esOscuro
-                      ? 'bg-slate-800 border-slate-700 text-sky-400'
-                      : 'bg-sky-50 border-sky-200 text-sky-600'
-                  }`}
-                >
-                  <Settings className="w-6 h-6" />
-                </div>
-                <div>
-                  <div className="font-bold text-base sm:text-lg leading-tight">
-                    Catálogos y Reporte Diario
-                  </div>
-                  <div
-                    className={`text-xs sm:text-sm mt-0.5 ${
-                      esOscuro ? 'text-slate-300' : 'text-slate-600'
-                    }`}
-                  >
-                    Administrar unidades, choferes y descargar Excel del día
                   </div>
                 </div>
               </div>
@@ -199,6 +206,44 @@ export default function HomePage() {
                     }`}
                   >
                     Expediente de unidades, seguros, tarjetas y licencias
+                  </div>
+                </div>
+              </div>
+              <ChevronRight
+                className={`w-5 h-5 group-hover:translate-x-1 transition shrink-0 ${
+                  esOscuro ? 'text-slate-400' : 'text-slate-500'
+                }`}
+              />
+            </Link>
+
+            <Link
+              href="/catalogos"
+              className={`group w-full border rounded-2xl p-4 sm:p-5 shadow transition flex items-center justify-between gap-4 ${
+                esOscuro
+                  ? 'bg-slate-900/90 hover:bg-slate-800/90 text-white border-slate-700/80'
+                  : 'bg-white/95 hover:bg-slate-50 text-slate-900 border-slate-200'
+              }`}
+            >
+              <div className="flex items-center gap-4">
+                <div
+                  className={`p-3 rounded-xl border ${
+                    esOscuro
+                      ? 'bg-slate-800 border-slate-700 text-sky-400'
+                      : 'bg-sky-50 border-sky-200 text-sky-600'
+                  }`}
+                >
+                  <Settings className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="font-bold text-base sm:text-lg leading-tight">
+                    Catálogos y Reporte Diario
+                  </div>
+                  <div
+                    className={`text-xs sm:text-sm mt-0.5 ${
+                      esOscuro ? 'text-slate-300' : 'text-slate-600'
+                    }`}
+                  >
+                    Administrar unidades, choferes y descargar Excel del día
                   </div>
                 </div>
               </div>

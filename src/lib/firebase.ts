@@ -91,3 +91,38 @@ export interface Chofer {
   fotoIneFrente?: string;
   fotoIneReverso?: string;
 }
+
+export type NivelRevision = 'OK' | 'BAJO' | 'ATENCION';
+
+export interface RegistroCombustible {
+  id: string;
+  unidadId: string;
+  unidadNombre: string;
+  choferId: string;
+  choferNombre: string;
+  litros: number;
+  monto?: number;
+  odometro?: number;
+  fechaIso: string;
+  horaTexto: string;
+  notas?: string;
+}
+
+export interface ReporteRevisionUnidad {
+  id: string;
+  unidadId: string;
+  unidadNombre: string;
+  choferId: string;
+  choferNombre: string;
+  cargaId?: string;
+  momento: 'SALIDA' | 'REGRESO' | 'REVISION';
+  nivelCombustible: 'VACIO' | '1/4' | '1/2' | '3/4' | 'LLENO';
+  aceite: NivelRevision;
+  anticongelante: NivelRevision;
+  llantas: NivelRevision;
+  limpieza: NivelRevision;
+  kilometraje?: number;
+  observaciones?: string;
+  fechaIso: string;
+  horaTexto: string;
+}

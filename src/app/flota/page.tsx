@@ -4,7 +4,10 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { db, Unidad, Chofer } from '@/lib/firebase';
 import { BotonTema, useTemaApp } from '@/components/BotonTema';
+import { IndicadorEstadoUnidad } from '@/components/IndicadorEstadoUnidad';
+import { IndicadorEstadoChofer } from '@/components/IndicadorEstadoChofer';
 import {
+  addDoc,
   collection,
   doc,
   onSnapshot,
@@ -13,117 +16,98 @@ import {
   where,
 } from 'firebase/firestore';
 import {
-  Car,
-  Users,
   Home,
-  Search,
+  Truck,
+  Users,
+  AlertTriangle,
   Pencil,
+  QrCode,
+  Plus,
   X,
   Save,
-  AlertTriangle,
-  CheckCircle2,
-  ShieldCheck,
-  IdCard,
   Camera,
   Trash2,
-  ZoomIn,
-  Upload,
+  Shield,
+  FileText,
+  Download,
+  ExternalLink,
 } from 'lucide-react';
 
-type EstadoVigencia = 'SIN_FECHA' | 'VIGENTE' | 'POR_VENCER' | 'VENCIDA';
-
-function evaluarVigencia(
-  fechaIso: string | undefined,
-  esOscuro: boolean
-): {
-  estado: EstadoVigencia;
-  etiqueta: string;
-  clase: string;
-} {
-  if (!fechaIso) {
-    return {
-      estado: 'SIN_FECHA',
-      etiqueta: 'Sin fecha',
-      clase: esOscuro
-        ? 'bg-slate-800 text-slate-400 border-slate-700'
-        : 'bg-slate-100 text-slate-600 border-slate-300',
-    };
-  }
-
-  const hoy = new Date();
-  hoy.setHours(0, 0, 0, 0);
-
-  const [y, m, d] = fechaIso.split('-').map(Number);
-  if (!y || !m || !d) {
-    return {
-      estado: 'SIN_FECHA',
-      etiqueta: fechaIso,
-      clase: esOscuro
-        ? 'bg-slate-800 text-slate-400 border-slate-700'
-        : 'bg-slate-100 text-slate-600 border-slate-300',
-    };
-  }
-
-  const fechaObj = new Date(y, m - 1, d);
-  fechaObj.setHours(0, 0, 0, 0);
-
-  const diffDias = Math.ceil((fechaObj.getTime() - hoy.getTime()) / 86400000);
-
-  if (diffDias < 0) {
-    return {
-      estado: 'VENCIDA',
-      etiqueta: `Vencida (${fechaIso})`,
-      clase: esOscuro
-        ? 'bg-rose-500/15 text-rose-300 border-rose-500/40'
-        : 'bg-rose-50 text-rose-700 border-rose-300',
-    };
-  }
-
-  if (diffDias <= 30) {
-    return {
-      estado: 'POR_VENCER',
-      etiqueta: `Vence en ${diffDias}d (${fechaIso})`,
-      clase: esOscuro
-        ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
-        : 'bg-amber-50 text-amber-800 border-amber-300',
-    };
-  }
-
-  return {
-    estado: 'VIGENTE',
-    etiqueta: `Vigente (${fechaIso})`,
-    clase: esOscuro
-      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
-      : 'bg-emerald-50 text-emerald-700 border-emerald-300',
-  };
+interface FotosUnidadExt {
+  frente?: string;
+  trasera?: string;
+  costadoIzq?: string;
+  costadoDer?: string;
+  tarjetaCirculacion?: string;
+  polizaSeguro?: string;
 }
 
-function unidadTienePendientes(u: Unidad): boolean {
-  return (
-    !u.tipoUnidad?.trim() ||
-    !u.placas?.trim() ||
-    !u.aseguradora?.trim() ||
-    !u.vencimientoSeguro?.trim() ||
-    !u.vencimientoTarjeta?.trim()
-  );
+type UnidadExt = Unidad & {
+  tipo?: string;
+  serie?: string;
+  poliza?: string;
+  seguroVence?: string | null;
+  tarjetaFolio?: string;
+  tarjetaVence?: string | null;
+  fotos?: FotosUnidadExt;
+};
+
+type ChoferExt = Chofer & {
+  licenciaNumero?: string;
+  licenciaTipo?: string;
+  licenciaVence?: string | null;
+  ineFolio?: string;
+  fotoLicencia?: string;
+  fotoIne?: string;
+};
+
+interface CargaEstadoDoc {
+  id: string;
+  unidadId?: string;
+  unidadNombre?: string;
+  unidad?: string;
+  choferId?: string;
+  choferNombre?: string;
+  chofer?: string;
+  destino?: string;
+  estado?: string;
+  fechaOperacion?: string;
+  fechaIso?: string;
 }
 
-function choferTienePendientes(c: Chofer): boolean {
-  return (
-    !c.telefono?.trim() ||
-    !c.numeroLicencia?.trim() ||
-    !c.vencimientoLicencia?.trim()
-  );
+function normalizarNombre(txt?: string): string {
+  return (txt || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
 }
 
-function obtenerIniciales(nombre: string): string {
-  const partes = nombre.trim().split(/\s+/).filter(Boolean);
-  if (partes.length === 0) return 'CH';
-  if (partes.length === 1) return partes[0].slice(0, 2).toUpperCase();
-  return `${partes[0][0]}${partes[1][0]}`.toUpperCase();
+function coincideNombreChofer(a?: string, b?: string): boolean {
+  const na = normalizarNombre(a);
+  const nb = normalizarNombre(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const primerA = na.split(/\s+/)[0];
+  const primerB = nb.split(/\s+/)[0];
+  return primerA.length >= 4 && primerA === primerB;
 }
 
-function comprimirImagen(file: File, maxDim = 900, calidad = 0.72): Promise<string> {
+function esEstadoEnRuta(estado?: string): boolean {
+  const limpio = normalizarNombre(estado).replace(/\s+/g, '_');
+  return limpio.includes('ruta') || limpio.includes('salio') || limpio.includes('transito');
+}
+
+function esEstadoCargando(estado?: string): boolean {
+  const limpio = normalizarNombre(estado).replace(/\s+/g, '_');
+  return limpio.includes('carg');
+}
+
+function esEstadoActivoOperativo(estado?: string): boolean {
+  return esEstadoEnRuta(estado) || esEstadoCargando(estado);
+}
+
+function comprimirImagen(file: File, maxDim = 800, calidad = 0.65): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -131,7 +115,6 @@ function comprimirImagen(file: File, maxDim = 900, calidad = 0.72): Promise<stri
       img.onload = () => {
         let width = img.width;
         let height = img.height;
-
         if (width > maxDim || height > maxDim) {
           if (width > height) {
             height = Math.round((height * maxDim) / width);
@@ -141,7 +124,6 @@ function comprimirImagen(file: File, maxDim = 900, calidad = 0.72): Promise<stri
             height = maxDim;
           }
         }
-
         const canvas = document.createElement('canvas');
         canvas.width = width;
         canvas.height = height;
@@ -153,344 +135,443 @@ function comprimirImagen(file: File, maxDim = 900, calidad = 0.72): Promise<stri
         ctx.drawImage(img, 0, 0, width, height);
         resolve(canvas.toDataURL('image/jpeg', calidad));
       };
-      img.onerror = () => reject(new Error('Archivo de imagen inválido'));
+      img.onerror = () => reject(new Error('Imagen no válida'));
       img.src = reader.result as string;
     };
-    reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
+    reader.onerror = () => reject(new Error('Error al leer archivo'));
     reader.readAsDataURL(file);
   });
 }
 
-interface SlotFotoProps {
-  etiqueta: string;
-  valor: string;
-  esOscuro: boolean;
-  onCambiar: (nuevaDataUrl: string) => void;
-  onAmpliar: (titulo: string, src: string) => void;
+function calcularPesoBase64KB(b64?: string): number {
+  if (!b64) return 0;
+  return Math.round((b64.length * 3) / 4 / 1024);
 }
 
-function SlotFoto({ etiqueta, valor, esOscuro, onCambiar, onAmpliar }: SlotFotoProps) {
-  const [procesando, setProcesando] = useState(false);
+function estadoVigenciaFecha(fechaIso?: string | null): {
+  etiqueta: string;
+  clase: string;
+  incompleto: boolean;
+} {
+  if (!fechaIso) {
+    return {
+      etiqueta: 'Sin fecha',
+      clase: 'bg-slate-800/80 text-slate-400 border-slate-700',
+      incompleto: true,
+    };
+  }
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+  const target = new Date(`${fechaIso}T00:00:00`);
+  const diffDias = Math.ceil((target.getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24));
 
-  const handleArchivo = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      setProcesando(true);
-      const comprimida = await comprimirImagen(file);
-      onCambiar(comprimida);
-    } finally {
-      setProcesando(false);
-      e.target.value = '';
-    }
+  if (diffDias < 0) {
+    return {
+      etiqueta: `Vencido (${fechaIso})`,
+      clase: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
+      incompleto: true,
+    };
+  }
+  if (diffDias <= 30) {
+    return {
+      etiqueta: `Vence en ${diffDias}d (${fechaIso})`,
+      clase: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+      incompleto: false,
+    };
+  }
+  return {
+    etiqueta: fechaIso,
+    clase: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35',
+    incompleto: false,
   };
-
-  return (
-    <div
-      className={`border rounded-xl p-2.5 flex flex-col gap-2 ${
-        esOscuro ? 'bg-slate-950/90 border-slate-800' : 'bg-slate-50 border-slate-200'
-      }`}
-    >
-      <div className="flex items-center justify-between gap-1">
-        <span
-          className={`text-[11px] font-bold truncate ${
-            esOscuro ? 'text-slate-300' : 'text-slate-700'
-          }`}
-        >
-          {etiqueta}
-        </span>
-        {valor && (
-          <button
-            type="button"
-            onClick={() => onCambiar('')}
-            title="Quitar foto"
-            className="text-slate-400 hover:text-rose-500 p-0.5 rounded"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        )}
-      </div>
-
-      {valor ? (
-        <div
-          className={`relative group h-24 rounded-lg overflow-hidden border ${
-            esOscuro ? 'border-slate-700 bg-slate-900' : 'border-slate-300 bg-white'
-          }`}
-        >
-          <img src={valor} alt={etiqueta} className="w-full h-full object-cover" />
-          <div className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-2">
-            <button
-              type="button"
-              onClick={() => onAmpliar(etiqueta, valor)}
-              className="bg-slate-900/90 text-white p-1.5 rounded-lg border border-slate-600 hover:border-amber-400"
-              title="Ver en grande"
-            >
-              <ZoomIn className="w-4 h-4" />
-            </button>
-            <label
-              className="bg-amber-600 text-white p-1.5 rounded-lg cursor-pointer hover:bg-amber-500"
-              title="Cambiar foto"
-            >
-              <Camera className="w-4 h-4" />
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleArchivo}
-                className="hidden"
-              />
-            </label>
-          </div>
-        </div>
-      ) : (
-        <label
-          className={`h-24 rounded-lg border border-dashed flex flex-col items-center justify-center gap-1 cursor-pointer transition ${
-            esOscuro
-              ? 'border-slate-700 hover:border-amber-500/70 bg-slate-900/60 text-slate-400 hover:text-amber-300'
-              : 'border-slate-300 hover:border-amber-500 bg-white text-slate-500 hover:text-amber-700'
-          }`}
-        >
-          <Camera className="w-5 h-5" />
-          <span className="text-[11px] font-semibold">
-            {procesando ? 'Procesando...' : 'Subir foto'}
-          </span>
-          <input
-            type="file"
-            accept="image/*"
-            onChange={handleArchivo}
-            disabled={procesando}
-            className="hidden"
-          />
-        </label>
-      )}
-    </div>
-  );
 }
 
 export default function FlotaPage() {
   const tema = useTemaApp();
   const esOscuro = tema === 'dark';
 
-  const [pestana, setPestana] = useState<'unidades' | 'choferes'>('unidades');
-  const [unidades, setUnidades] = useState<Unidad[]>([]);
-  const [choferes, setChoferes] = useState<Chofer[]>([]);
-  const [busqueda, setBusqueda] = useState('');
+  const [unidades, setUnidades] = useState<UnidadExt[]>([]);
+  const [choferes, setChoferes] = useState<ChoferExt[]>([]);
+  const [cargasOperativas, setCargasOperativas] = useState<CargaEstadoDoc[]>([]);
+  const [hoyIso, setHoyIso] = useState<string>('');
+  const [tab, setTab] = useState<'unidades' | 'choferes'>('unidades');
+  const [originUrl, setOriginUrl] = useState<string>('');
 
-  const [fotoAmpliada, setFotoAmpliada] = useState<{ titulo: string; src: string } | null>(null);
-
-  const [unidadEditando, setUnidadEditando] = useState<Unidad | null>(null);
-  const [formUnidad, setFormUnidad] = useState({
-    tipoUnidad: '',
-    placas: '',
-    serieVin: '',
-    marcaModelo: '',
-    anio: '',
-    estatusOperativo: 'ACTIVA' as 'ACTIVA' | 'MANTENIMIENTO',
-    aseguradora: '',
-    polizaSeguro: '',
-    vencimientoSeguro: '',
-    tarjetaCirculacion: '',
-    vencimientoTarjeta: '',
-    choferDefaultId: '',
-    notas: '',
-    fotoFrente: '',
-    fotoTrasero: '',
-    fotoCostadoIzq: '',
-    fotoCostadoDer: '',
-  });
+  // Modal Unidad
+  const [modalUnidadAbierto, setModalUnidadAbierto] = useState(false);
+  const [unidadEditando, setUnidadEditando] = useState<UnidadExt | null>(null);
+  const [uNombre, setUNombre] = useState('');
+  const [uPlacas, setUPlacas] = useState('');
+  const [uMarcaModelo, setUMarcaModelo] = useState('');
+  const [uTipo, setUTipo] = useState('');
+  const [uAnio, setUAnio] = useState('');
+  const [uSerie, setUSerie] = useState('');
+  const [uChoferDefaultId, setUChoferDefaultId] = useState('');
+  const [uAseguradora, setUAseguradora] = useState('');
+  const [uPoliza, setUPoliza] = useState('');
+  const [uSeguroVence, setUSeguroVence] = useState('');
+  const [uTarjetaFolio, setUTarjetaFolio] = useState('');
+  const [uTarjetaVence, setUTarjetaVence] = useState('');
+  const [uFotos, setUFotos] = useState<FotosUnidadExt>({});
   const [guardandoUnidad, setGuardandoUnidad] = useState(false);
 
-  const [choferEditando, setChoferEditando] = useState<Chofer | null>(null);
-  const [formChofer, setFormChofer] = useState({
-    telefono: '',
-    numeroLicencia: '',
-    tipoLicencia: '',
-    vencimientoLicencia: '',
-    unidadAsignadaId: '',
-    notas: '',
-    fotoPerfil: '',
-    fotoLicenciaFrente: '',
-    fotoLicenciaReverso: '',
-    fotoIneFrente: '',
-    fotoIneReverso: '',
-  });
-  const [procesandoPerfil, setProcesandoPerfil] = useState(false);
+  // Modal QR Unidad
+  const [unidadQr, setUnidadQr] = useState<UnidadExt | null>(null);
+
+  // Modal Chofer
+  const [modalChoferAbierto, setModalChoferAbierto] = useState(false);
+  const [choferEditando, setChoferEditando] = useState<ChoferExt | null>(null);
+  const [cNombre, setCNombre] = useState('');
+  const [cTelefono, setCTelefono] = useState('');
+  const [cUnidadAsignadaId, setCUnidadAsignadaId] = useState('');
+  const [cLicenciaNumero, setCLicenciaNumero] = useState('');
+  const [cLicenciaTipo, setCLicenciaTipo] = useState('');
+  const [cLicenciaVence, setCLicenciaVence] = useState('');
+  const [cIneFolio, setCIneFolio] = useState('');
+  const [cFotoPerfil, setCFotoPerfil] = useState('');
+  const [cFotoLicencia, setCFotoLicencia] = useState('');
+  const [cFotoIne, setCFotoIne] = useState('');
   const [guardandoChofer, setGuardandoChofer] = useState(false);
 
   useEffect(() => {
-    const qUnidades = query(collection(db, 'unidades'), where('activo', '==', true));
-    const qChoferes = query(collection(db, 'choferes'), where('activo', '==', true));
+    setOriginUrl(window.location.origin);
+    setHoyIso(new Date().toLocaleDateString('en-CA'));
 
-    const unsubU = onSnapshot(qUnidades, (snap) => {
-      const lista = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Unidad));
-      lista.sort((a, b) => a.nombre.localeCompare(b.nombre));
-      setUnidades(lista);
+    const qU = query(collection(db, 'unidades'), where('activo', '==', true));
+    const qC = query(collection(db, 'choferes'), where('activo', '==', true));
+    const qCr = collection(db, 'cargas');
+
+    const unsubU = onSnapshot(qU, (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as UnidadExt));
+      list.sort((a, b) => a.nombre.localeCompare(b.nombre));
+      setUnidades(list);
     });
 
-    const unsubC = onSnapshot(qChoferes, (snap) => {
-      const lista = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Chofer));
-      lista.sort((a, b) => a.nombre.localeCompare(b.nombre));
-      setChoferes(lista);
+    const unsubC = onSnapshot(qC, (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ChoferExt));
+      list.sort((a, b) => a.nombre.localeCompare(b.nombre));
+      setChoferes(list);
+    });
+
+    const unsubCr = onSnapshot(qCr, (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as CargaEstadoDoc));
+      setCargasOperativas(list);
     });
 
     return () => {
       unsubU();
       unsubC();
+      unsubCr();
     };
   }, []);
 
-  const abrirModalUnidad = (u: Unidad) => {
-    setUnidadEditando(u);
-    setFormUnidad({
-      tipoUnidad: u.tipoUnidad || '',
-      placas: u.placas || '',
-      serieVin: u.serieVin || '',
-      marcaModelo: u.marcaModelo || '',
-      anio: u.anio || '',
-      estatusOperativo: u.estatusOperativo || 'ACTIVA',
-      aseguradora: u.aseguradora || '',
-      polizaSeguro: u.polizaSeguro || '',
-      vencimientoSeguro: u.vencimientoSeguro || '',
-      tarjetaCirculacion: u.tarjetaCirculacion || '',
-      vencimientoTarjeta: u.vencimientoTarjeta || '',
-      choferDefaultId: u.choferDefaultId || '',
-      notas: u.notas || '',
-      fotoFrente: u.fotoFrente || '',
-      fotoTrasero: u.fotoTrasero || '',
-      fotoCostadoIzq: u.fotoCostadoIzq || '',
-      fotoCostadoDer: u.fotoCostadoDer || '',
+  const estadoOperativoPorUnidad = useMemo(() => {
+    const enRutaPorId = new Set<string>();
+    const enRutaPorNombre = new Map<string, { chofer?: string; destino?: string }>();
+    const cargandoPorNombre = new Set<string>();
+
+    cargasOperativas.forEach((cg) => {
+      const fechaDoc = cg.fechaOperacion || cg.fechaIso;
+      if (hoyIso && fechaDoc && fechaDoc !== hoyIso) return;
+
+      const nombreUn = normalizarNombre(cg.unidadNombre || cg.unidad);
+      if (esEstadoEnRuta(cg.estado)) {
+        if (cg.unidadId) enRutaPorId.add(cg.unidadId);
+        if (nombreUn) {
+          enRutaPorNombre.set(nombreUn, {
+            chofer: cg.choferNombre || cg.chofer,
+            destino: cg.destino,
+          });
+        }
+      } else if (esEstadoCargando(cg.estado)) {
+        if (nombreUn) cargandoPorNombre.add(nombreUn);
+      }
     });
+
+    return { enRutaPorId, enRutaPorNombre, cargandoPorNombre };
+  }, [cargasOperativas, hoyIso]);
+
+  const estadoOperativoPorChofer = useMemo(() => {
+    const cargasHoyActivas = cargasOperativas.filter((cg) => {
+      const fechaDoc = cg.fechaOperacion || cg.fechaIso;
+      if (hoyIso && fechaDoc && fechaDoc !== hoyIso) return false;
+      return esEstadoActivoOperativo(cg.estado);
+    });
+
+    const mapa = new Map<
+      string,
+      { ocupado: boolean; tipo: 'En ruta' | 'Cargando'; detalle?: string }
+    >();
+
+    choferes.forEach((ch) => {
+      const cargaDirecta = cargasHoyActivas.find(
+        (cg) =>
+          cg.choferId === ch.id ||
+          coincideNombreChofer(cg.choferNombre || cg.chofer, ch.nombre)
+      );
+
+      if (cargaDirecta) {
+        const enRuta = esEstadoEnRuta(cargaDirecta.estado);
+        const unidadTxt = cargaDirecta.unidadNombre || cargaDirecta.unidad;
+        const destinoTxt = cargaDirecta.destino;
+        const detalle = [unidadTxt, destinoTxt ? `Destino: ${destinoTxt}` : '']
+          .filter(Boolean)
+          .join(' • ');
+
+        mapa.set(ch.id, {
+          ocupado: true,
+          tipo: enRuta ? 'En ruta' : 'Cargando',
+          detalle,
+        });
+      }
+    });
+
+    return mapa;
+  }, [choferes, cargasOperativas, hoyIso]);
+
+  const unidadEstaIncompleta = (u: UnidadExt): boolean => {
+    const tieneFotosBase = Boolean(
+      u.fotos?.frente && u.fotos?.trasera && (u.fotos?.costadoIzq || u.fotos?.costadoDer)
+    );
+    return (
+      !u.placas ||
+      !u.serie ||
+      !u.seguroVence ||
+      !u.tarjetaVence ||
+      !tieneFotosBase
+    );
   };
+
+  const choferEstaIncompleto = (c: ChoferExt): boolean => {
+    return !c.licenciaNumero || !c.licenciaVence || !c.ineFolio || !c.fotoLicencia;
+  };
+
+  const unidadesIncompletasCount = useMemo(
+    () => unidades.filter(unidadEstaIncompleta).length,
+    [unidades]
+  );
+
+  const choferesIncompletosCount = useMemo(
+    () => choferes.filter(choferEstaIncompleto).length,
+    [choferes]
+  );
+
+  const unidadesEnRutaCount = useMemo(() => {
+    return unidades.filter(
+      (u) =>
+        estadoOperativoPorUnidad.enRutaPorId.has(u.id) ||
+        estadoOperativoPorUnidad.enRutaPorNombre.has(normalizarNombre(u.nombre))
+    ).length;
+  }, [unidades, estadoOperativoPorUnidad]);
+
+  const choferesOcupadosCount = useMemo(() => {
+    let total = 0;
+    choferes.forEach((c) => {
+      if (estadoOperativoPorChofer.get(c.id)?.ocupado) total += 1;
+    });
+    return total;
+  }, [choferes, estadoOperativoPorChofer]);
+
+  const abrirModalUnidad = (u?: UnidadExt) => {
+    if (u) {
+      setUnidadEditando(u);
+      setUNombre(u.nombre || '');
+      setUPlacas(u.placas || '');
+      setUMarcaModelo(u.marcaModelo || '');
+      setUTipo(u.tipo || '');
+      setUAnio(u.anio ? String(u.anio) : '');
+      setUSerie(u.serie || '');
+      setUChoferDefaultId(u.choferDefaultId || '');
+      setUAseguradora(u.aseguradora || '');
+      setUPoliza(u.poliza || '');
+      setUSeguroVence(u.seguroVence || '');
+      setUTarjetaFolio(u.tarjetaFolio || '');
+      setUTarjetaVence(u.tarjetaVence || '');
+      setUFotos(u.fotos || {});
+    } else {
+      setUnidadEditando(null);
+      setUNombre('');
+      setUPlacas('');
+      setUMarcaModelo('');
+      setUTipo('');
+      setUAnio('');
+      setUSerie('');
+      setUChoferDefaultId('');
+      setUAseguradora('');
+      setUPoliza('');
+      setUSeguroVence('');
+      setUTarjetaFolio('');
+      setUTarjetaVence('');
+      setUFotos({});
+    }
+    setModalUnidadAbierto(true);
+  };
+
+  const handleSubirFotoUnidad = async (
+    campo: keyof FotosUnidadExt,
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const b64 = await comprimirImagen(file, 780, 0.62);
+      setUFotos((prev) => ({ ...prev, [campo]: b64 }));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'No se pudo cargar la foto');
+    } finally {
+      e.target.value = '';
+    }
+  };
+
+  const pesoTotalFotosUnidadKB = useMemo(() => {
+    return (
+      calcularPesoBase64KB(uFotos.frente) +
+      calcularPesoBase64KB(uFotos.trasera) +
+      calcularPesoBase64KB(uFotos.costadoIzq) +
+      calcularPesoBase64KB(uFotos.costadoDer) +
+      calcularPesoBase64KB(uFotos.tarjetaCirculacion) +
+      calcularPesoBase64KB(uFotos.polizaSeguro)
+    );
+  }, [uFotos]);
 
   const guardarUnidad = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!unidadEditando || guardandoUnidad) return;
+    if (!uNombre.trim() || guardandoUnidad) return;
+    if (pesoTotalFotosUnidadKB > 850) {
+      alert('El peso combinado de las fotos es muy alto. Elimina o vuelve a capturar alguna.');
+      return;
+    }
 
     try {
       setGuardandoUnidad(true);
-      await updateDoc(doc(db, 'unidades', unidadEditando.id), {
-        tipoUnidad: formUnidad.tipoUnidad.trim(),
-        placas: formUnidad.placas.trim().toUpperCase(),
-        serieVin: formUnidad.serieVin.trim().toUpperCase(),
-        marcaModelo: formUnidad.marcaModelo.trim(),
-        anio: formUnidad.anio.trim(),
-        estatusOperativo: formUnidad.estatusOperativo,
-        aseguradora: formUnidad.aseguradora.trim(),
-        polizaSeguro: formUnidad.polizaSeguro.trim(),
-        vencimientoSeguro: formUnidad.vencimientoSeguro,
-        tarjetaCirculacion: formUnidad.tarjetaCirculacion.trim(),
-        vencimientoTarjeta: formUnidad.vencimientoTarjeta,
-        choferDefaultId: formUnidad.choferDefaultId,
-        notas: formUnidad.notas.trim(),
-        fotoFrente: formUnidad.fotoFrente,
-        fotoTrasero: formUnidad.fotoTrasero,
-        fotoCostadoIzq: formUnidad.fotoCostadoIzq,
-        fotoCostadoDer: formUnidad.fotoCostadoDer,
-      });
-      setUnidadEditando(null);
+      const payload = {
+        nombre: uNombre.trim(),
+        placas: uPlacas.trim().toUpperCase(),
+        marcaModelo: uMarcaModelo.trim(),
+        tipo: uTipo.trim(),
+        anio: uAnio ? Number(uAnio) : null,
+        serie: uSerie.trim().toUpperCase(),
+        choferDefaultId: uChoferDefaultId || null,
+        aseguradora: uAseguradora.trim(),
+        poliza: uPoliza.trim(),
+        seguroVence: uSeguroVence || null,
+        tarjetaFolio: uTarjetaFolio.trim(),
+        tarjetaVence: uTarjetaVence || null,
+        fotos: uFotos,
+        activo: true,
+      };
+
+      if (unidadEditando) {
+        await updateDoc(doc(db, 'unidades', unidadEditando.id), payload);
+      } else {
+        await addDoc(collection(db, 'unidades'), payload);
+      }
+      setModalUnidadAbierto(false);
+    } catch (err) {
+      alert(
+        `No se pudo guardar la unidad: ${err instanceof Error ? err.message : 'Error desconocido'}`
+      );
     } finally {
       setGuardandoUnidad(false);
     }
   };
 
-  const abrirModalChofer = (c: Chofer) => {
-    setChoferEditando(c);
-    setFormChofer({
-      telefono: c.telefono || '',
-      numeroLicencia: c.numeroLicencia || '',
-      tipoLicencia: c.tipoLicencia || '',
-      vencimientoLicencia: c.vencimientoLicencia || '',
-      unidadAsignadaId: c.unidadAsignadaId || '',
-      notas: c.notas || '',
-      fotoPerfil: c.fotoPerfil || '',
-      fotoLicenciaFrente: c.fotoLicenciaFrente || '',
-      fotoLicenciaReverso: c.fotoLicenciaReverso || '',
-      fotoIneFrente: c.fotoIneFrente || '',
-      fotoIneReverso: c.fotoIneReverso || '',
-    });
+  const abrirModalChofer = (c?: ChoferExt) => {
+    if (c) {
+      setChoferEditando(c);
+      setCNombre(c.nombre || '');
+      setCTelefono(c.telefono || '');
+      setCUnidadAsignadaId(c.unidadAsignadaId || '');
+      setCLicenciaNumero(c.licenciaNumero || '');
+      setCLicenciaTipo(c.licenciaTipo || '');
+      setCLicenciaVence(c.licenciaVence || '');
+      setCIneFolio(c.ineFolio || '');
+      setCFotoPerfil(c.fotoPerfil || '');
+      setCFotoLicencia(c.fotoLicencia || '');
+      setCFotoIne(c.fotoIne || '');
+    } else {
+      setChoferEditando(null);
+      setCNombre('');
+      setCTelefono('');
+      setCUnidadAsignadaId('');
+      setCLicenciaNumero('');
+      setCLicenciaTipo('');
+      setCLicenciaVence('');
+      setCIneFolio('');
+      setCFotoPerfil('');
+      setCFotoLicencia('');
+      setCFotoIne('');
+    }
+    setModalChoferAbierto(true);
   };
 
-  const handleFotoPerfilArchivo = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSubirFotoChofer = async (
+    campo: 'perfil' | 'licencia' | 'ine',
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      setProcesandoPerfil(true);
-      const comprimida = await comprimirImagen(file, 600, 0.78);
-      setFormChofer((prev) => ({ ...prev, fotoPerfil: comprimida }));
+      const b64 = await comprimirImagen(file, campo === 'perfil' ? 450 : 750, 0.65);
+      if (campo === 'perfil') setCFotoPerfil(b64);
+      if (campo === 'licencia') setCFotoLicencia(b64);
+      if (campo === 'ine') setCFotoIne(b64);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'No se pudo cargar la foto');
     } finally {
-      setProcesandoPerfil(false);
       e.target.value = '';
     }
   };
 
   const guardarChofer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!choferEditando || guardandoChofer) return;
+    if (!cNombre.trim() || guardandoChofer) return;
 
     try {
       setGuardandoChofer(true);
-      await updateDoc(doc(db, 'choferes', choferEditando.id), {
-        telefono: formChofer.telefono.trim(),
-        numeroLicencia: formChofer.numeroLicencia.trim().toUpperCase(),
-        tipoLicencia: formChofer.tipoLicencia.trim().toUpperCase(),
-        vencimientoLicencia: formChofer.vencimientoLicencia,
-        unidadAsignadaId: formChofer.unidadAsignadaId,
-        notas: formChofer.notas.trim(),
-        fotoPerfil: formChofer.fotoPerfil,
-        fotoLicenciaFrente: formChofer.fotoLicenciaFrente,
-        fotoLicenciaReverso: formChofer.fotoLicenciaReverso,
-        fotoIneFrente: formChofer.fotoIneFrente,
-        fotoIneReverso: formChofer.fotoIneReverso,
-      });
-      setChoferEditando(null);
+      const payload = {
+        nombre: cNombre.trim(),
+        telefono: cTelefono.trim(),
+        unidadAsignadaId: cUnidadAsignadaId || null,
+        licenciaNumero: cLicenciaNumero.trim().toUpperCase(),
+        licenciaTipo: cLicenciaTipo.trim(),
+        licenciaVence: cLicenciaVence || null,
+        ineFolio: cIneFolio.trim().toUpperCase(),
+        fotoPerfil: cFotoPerfil || '',
+        fotoLicencia: cFotoLicencia || '',
+        fotoIne: cFotoIne || '',
+        activo: true,
+      };
+
+      if (choferEditando) {
+        await updateDoc(doc(db, 'choferes', choferEditando.id), payload);
+      } else {
+        await addDoc(collection(db, 'choferes'), payload);
+      }
+      setModalChoferAbierto(false);
+    } catch (err) {
+      alert(
+        `No se pudo guardar el chofer: ${err instanceof Error ? err.message : 'Error desconocido'}`
+      );
     } finally {
       setGuardandoChofer(false);
     }
   };
 
-  const unidadesConPendientes = useMemo(
-    () => unidades.filter(unidadTienePendientes).length,
-    [unidades]
-  );
+  const claseTarjeta = esOscuro
+    ? 'bg-slate-900/90 border-slate-800 text-slate-100'
+    : 'bg-white border-slate-200 text-slate-900 shadow-sm';
 
-  const licenciasAlerta = useMemo(
-    () =>
-      choferes.filter((c) => {
-        const v = evaluarVigencia(c.vencimientoLicencia, esOscuro).estado;
-        return v === 'VENCIDA' || v === 'POR_VENCER' || choferTienePendientes(c);
-      }).length,
-    [choferes, esOscuro]
-  );
+  const claseCampo = esOscuro
+    ? 'w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white outline-none focus:border-amber-500'
+    : 'w-full rounded-xl bg-slate-50 border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-amber-500';
 
-  const texto = busqueda.trim().toLowerCase();
-
-  const unidadesFiltradas = useMemo(() => {
-    if (!texto) return unidades;
-    return unidades.filter((u) => {
-      return (
-        u.nombre.toLowerCase().includes(texto) ||
-        (u.placas || '').toLowerCase().includes(texto) ||
-        (u.tipoUnidad || '').toLowerCase().includes(texto) ||
-        (u.aseguradora || '').toLowerCase().includes(texto) ||
-        (u.polizaSeguro || '').toLowerCase().includes(texto)
-      );
-    });
-  }, [unidades, texto]);
-
-  const choferesFiltrados = useMemo(() => {
-    if (!texto) return choferes;
-    return choferes.filter((c) => {
-      return (
-        c.nombre.toLowerCase().includes(texto) ||
-        (c.telefono || '').toLowerCase().includes(texto) ||
-        (c.numeroLicencia || '').toLowerCase().includes(texto) ||
-        (c.tipoLicencia || '').toLowerCase().includes(texto)
-      );
-    });
-  }, [choferes, texto]);
-
-  const claseInputModal = esOscuro
-    ? 'w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-white outline-none focus:border-amber-500'
-    : 'w-full rounded-xl bg-slate-50 border border-slate-300 px-3 py-2 text-slate-900 outline-none focus:border-amber-500';
+  const urlQrUnidad = unidadQr ? `${originUrl}/chofer?unidad=${unidadQr.id}` : '';
+  const imgQrApi = urlQrUnidad
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=280x280&margin=10&data=${encodeURIComponent(
+        urlQrUnidad
+      )}`
+    : '';
 
   return (
     <div
@@ -499,17 +580,17 @@ export default function FlotaPage() {
       }`}
     >
       <header
-        className={`border-b px-4 sm:px-6 py-4 sticky top-0 z-10 flex flex-wrap items-center justify-between gap-4 transition-colors ${
+        className={`border-b px-4 py-3.5 sticky top-0 z-10 flex items-center justify-between gap-3 ${
           esOscuro
             ? 'bg-slate-900 border-slate-800'
             : 'bg-white border-slate-200 shadow-sm'
         }`}
       >
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
           <Link
             href="/"
             title="Volver al menú principal"
-            className={`border p-2.5 rounded-xl transition ${
+            className={`border p-2 rounded-xl transition shrink-0 ${
               esOscuro
                 ? 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
                 : 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800'
@@ -517,1194 +598,877 @@ export default function FlotaPage() {
           >
             <Home className="w-5 h-5" />
           </Link>
-
-          <img
-            src="/logo-bravo.png"
-            alt="Logo Bravo"
-            className={`w-10 h-10 rounded-xl object-contain p-1 border ${
-              esOscuro ? 'bg-slate-950 border-slate-700' : 'bg-slate-50 border-slate-200'
-            }`}
-          />
-
-          <div>
-            <h1
-              className={`text-lg sm:text-xl font-bold tracking-tight ${
-                esOscuro ? 'text-white' : 'text-slate-900'
-              }`}
-            >
-              Control de Flota — Encargado de Autos
+          <div className="min-w-0">
+            <h1 className="text-base sm:text-lg font-bold truncate">
+              Control de Flota — Unidades y Choferes
             </h1>
-            <p className={`text-xs ${esOscuro ? 'text-slate-400' : 'text-slate-500'}`}>
-              Expediente fotográfico, seguros, tarjetas de circulación, licencias e INE
+            <p className={`text-xs truncate ${esOscuro ? 'text-slate-400' : 'text-slate-500'}`}>
+              Expedientes, documentos vigentes, QR por unidad y disponibilidad en vivo
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3 flex-1 justify-end max-w-md">
-          <div className="relative flex-1 min-w-[180px]">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Buscar unidad, placa, chofer..."
-              value={busqueda}
-              onChange={(e) => setBusqueda(e.target.value)}
-              className={`w-full border focus:border-amber-500 rounded-xl pl-10 pr-4 py-2 text-sm outline-none ${
-                esOscuro
-                  ? 'bg-slate-950 border-slate-700 text-white'
-                  : 'bg-slate-50 border-slate-300 text-slate-900'
-              }`}
-            />
-          </div>
-
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => (tab === 'unidades' ? abrirModalUnidad() : abrirModalChofer())}
+            className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs px-3 py-2 rounded-xl inline-flex items-center gap-1.5 shadow transition"
+          >
+            <Plus className="w-4 h-4" />
+            <span className="hidden sm:inline">
+              {tab === 'unidades' ? 'Nueva Unidad' : 'Nuevo Chofer'}
+            </span>
+          </button>
           <BotonTema />
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto p-4 sm:p-6 space-y-6">
-        {/* Métricas rápidas */}
-        <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div
-            className={`border rounded-2xl p-4 flex items-center justify-between ${
-              esOscuro
-                ? 'bg-slate-900/80 border-slate-800'
-                : 'bg-white border-slate-200 shadow-sm'
-            }`}
-          >
+      <main className="max-w-7xl mx-auto p-4 space-y-5">
+        <section className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+          <div className={`border rounded-2xl p-4 flex items-center justify-between ${claseTarjeta}`}>
             <div>
-              <p
-                className={`text-xs font-semibold uppercase ${
-                  esOscuro ? 'text-slate-400' : 'text-slate-500'
-                }`}
-              >
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
                 Unidades Activas
               </p>
-              <p className="text-2xl font-bold mt-0.5">{unidades.length}</p>
+              <div className="flex items-baseline gap-2.5 mt-1">
+                <span className="text-2xl font-extrabold">{unidades.length}</span>
+                <span className="text-xs font-bold text-emerald-400">
+                  ({unidadesEnRutaCount} en ruta)
+                </span>
+              </div>
             </div>
-            <div className="p-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-500">
-              <Car className="w-5 h-5" />
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400">
+              <Truck className="w-5 h-5" />
             </div>
           </div>
 
-          <div
-            className={`border rounded-2xl p-4 flex items-center justify-between ${
-              esOscuro
-                ? 'bg-slate-900/80 border-slate-800'
-                : 'bg-white border-slate-200 shadow-sm'
-            }`}
-          >
+          <div className={`border rounded-2xl p-4 flex items-center justify-between ${claseTarjeta}`}>
             <div>
-              <p
-                className={`text-xs font-semibold uppercase ${
-                  esOscuro ? 'text-slate-400' : 'text-slate-500'
-                }`}
-              >
-                Datos / Docs por Completar
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                Datos / Docs por completar
               </p>
-              <p
-                className={`text-2xl font-bold mt-0.5 ${
-                  esOscuro ? 'text-amber-300' : 'text-amber-600'
-                }`}
-              >
-                {unidadesConPendientes}
+              <p className="text-2xl font-extrabold text-amber-400 mt-1">
+                {unidadesIncompletasCount}
               </p>
             </div>
-            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-500">
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400">
               <AlertTriangle className="w-5 h-5" />
             </div>
           </div>
 
-          <div
-            className={`border rounded-2xl p-4 flex items-center justify-between ${
-              esOscuro
-                ? 'bg-slate-900/80 border-slate-800'
-                : 'bg-white border-slate-200 shadow-sm'
-            }`}
-          >
+          <div className={`border rounded-2xl p-4 flex items-center justify-between ${claseTarjeta}`}>
             <div>
-              <p
-                className={`text-xs font-semibold uppercase ${
-                  esOscuro ? 'text-slate-400' : 'text-slate-500'
-                }`}
-              >
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
                 Choferes (Licencia / INE)
               </p>
-              <p className="text-2xl font-bold mt-0.5">
-                {choferes.length}{' '}
-                <span
-                  className={`text-xs font-semibold ${
-                    esOscuro ? 'text-amber-300' : 'text-amber-600'
-                  }`}
-                >
-                  ({licenciasAlerta} por revisar)
+              <div className="flex items-baseline gap-2 mt-1 flex-wrap">
+                <span className="text-2xl font-extrabold">{choferes.length}</span>
+                <span className="text-xs font-bold text-emerald-400">
+                  ({choferesOcupadosCount} ocupados)
                 </span>
-              </p>
+                {choferesIncompletosCount > 0 && (
+                  <span className="text-xs font-bold text-amber-400">
+                    • {choferesIncompletosCount} por revisar
+                  </span>
+                )}
+              </div>
             </div>
-            <div className="p-3 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-500">
+            <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/30 text-sky-400">
               <Users className="w-5 h-5" />
             </div>
           </div>
         </section>
 
-        {/* Selector de pestañas */}
-        <div className="flex flex-wrap gap-2.5">
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setPestana('unidades')}
-            className={`px-4 py-2.5 rounded-xl text-sm font-bold inline-flex items-center gap-2 transition border ${
-              pestana === 'unidades'
+            onClick={() => setTab('unidades')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold border inline-flex items-center gap-2 transition ${
+              tab === 'unidades'
                 ? 'bg-amber-600 text-white border-amber-500 shadow'
-                : esOscuro
-                ? 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'
-                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                : claseTarjeta
             }`}
           >
-            <Car className="w-4 h-4" />
-            Unidades ({unidades.length})
+            <Truck className="w-4 h-4" />
+            <span>Unidades ({unidades.length})</span>
           </button>
 
           <button
             type="button"
-            onClick={() => setPestana('choferes')}
-            className={`px-4 py-2.5 rounded-xl text-sm font-bold inline-flex items-center gap-2 transition border ${
-              pestana === 'choferes'
+            onClick={() => setTab('choferes')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold border inline-flex items-center gap-2 transition ${
+              tab === 'choferes'
                 ? 'bg-amber-600 text-white border-amber-500 shadow'
-                : esOscuro
-                ? 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'
-                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                : claseTarjeta
             }`}
           >
             <Users className="w-4 h-4" />
-            Choferes ({choferes.length})
+            <span>Choferes ({choferes.length})</span>
           </button>
         </div>
 
-        {/* Pestaña de Unidades */}
-        {pestana === 'unidades' && (
+        {tab === 'unidades' && (
           <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {unidadesFiltradas.length === 0 ? (
-              <div
-                className={`col-span-full border border-dashed rounded-2xl p-10 text-center ${
-                  esOscuro
-                    ? 'bg-slate-900/70 border-slate-800 text-slate-400'
-                    : 'bg-white border-slate-300 text-slate-500'
-                }`}
-              >
-                No hay unidades que coincidan con la búsqueda.
-              </div>
-            ) : (
-              unidadesFiltradas.map((u) => {
-                const seguro = evaluarVigencia(u.vencimientoSeguro, esOscuro);
-                const tarjeta = evaluarVigencia(u.vencimientoTarjeta, esOscuro);
-                const incompleta = unidadTienePendientes(u);
-                const choferAsignado = choferes.find((c) => c.id === u.choferDefaultId);
+            {unidades.map((u) => {
+              const nombreNorm = normalizarNombre(u.nombre);
+              const infoRuta = estadoOperativoPorUnidad.enRutaPorNombre.get(nombreNorm);
+              const estaEnRuta =
+                estadoOperativoPorUnidad.enRutaPorId.has(u.id) || Boolean(infoRuta);
+              const estaCargando =
+                !estaEnRuta && estadoOperativoPorUnidad.cargandoPorNombre.has(nombreNorm);
 
-                const fotosUnidad = [
-                  { label: 'Frente', src: u.fotoFrente },
-                  { label: 'Trasero', src: u.fotoTrasero },
-                  { label: 'Costado Izq.', src: u.fotoCostadoIzq },
-                  { label: 'Costado Der.', src: u.fotoCostadoDer },
-                ].filter((f) => Boolean(f.src));
+              const incompleta = unidadEstaIncompleta(u);
+              const choferBase = choferes.find((c) => c.id === u.choferDefaultId);
+              const vigSeguro = estadoVigenciaFecha(u.seguroVence);
+              const vigTarjeta = estadoVigenciaFecha(u.tarjetaVence);
 
-                return (
-                  <div
-                    key={u.id}
-                    className={`border rounded-2xl p-5 flex flex-col justify-between gap-4 shadow ${
-                      esOscuro
-                        ? 'bg-slate-900/90 border-slate-800'
-                        : 'bg-white border-slate-200'
-                    }`}
-                  >
-                    <div className="space-y-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <h2 className="text-lg font-bold">{u.nombre}</h2>
-                            <span
-                              className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
-                                u.estatusOperativo === 'MANTENIMIENTO'
-                                  ? esOscuro
-                                    ? 'bg-rose-500/15 text-rose-300 border-rose-500/40'
-                                    : 'bg-rose-50 text-rose-700 border-rose-300'
-                                  : esOscuro
-                                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
-                                  : 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                              }`}
-                            >
-                              {u.estatusOperativo === 'MANTENIMIENTO' ? 'Mantenimiento' : 'Activa'}
-                            </span>
-                          </div>
-                          <p
-                            className={`text-xs mt-0.5 ${
-                              esOscuro ? 'text-slate-400' : 'text-slate-500'
-                            }`}
-                          >
-                            {u.tipoUnidad || 'Tipo sin especificar'}{' '}
-                            {u.marcaModelo ? `• ${u.marcaModelo}` : ''}{' '}
-                            {u.anio ? `(${u.anio})` : ''}
-                          </p>
+              const fotosGaleria = [
+                u.fotos?.frente,
+                u.fotos?.trasera,
+                u.fotos?.costadoIzq,
+                u.fotos?.costadoDer,
+              ].filter(Boolean) as string[];
+
+              return (
+                <div
+                  key={u.id}
+                  className={`border rounded-2xl p-4 flex flex-col justify-between space-y-3.5 transition ${
+                    estaEnRuta
+                      ? esOscuro
+                        ? 'bg-slate-900/95 border-emerald-500/45 shadow-[0_0_20px_rgba(16,185,129,0.08)]'
+                        : 'bg-white border-emerald-400 shadow-sm'
+                      : claseTarjeta
+                  }`}
+                >
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h2 className="text-base font-extrabold truncate">{u.nombre}</h2>
+                          <IndicadorEstadoUnidad
+                            enRuta={estaEnRuta}
+                            cargando={estaCargando}
+                          />
                         </div>
-
-                        {incompleta ? (
-                          <span
-                            className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border shrink-0 ${
-                              esOscuro
-                                ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
-                                : 'bg-amber-50 text-amber-800 border-amber-300'
-                            }`}
-                          >
-                            Por completar
-                          </span>
-                        ) : (
-                          <span
-                            className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border shrink-0 inline-flex items-center gap-1 ${
-                              esOscuro
-                                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                                : 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                            }`}
-                          >
-                            <CheckCircle2 className="w-3 h-3" /> Completo
-                          </span>
+                        <p
+                          className={`text-xs mt-0.5 ${
+                            esOscuro ? 'text-slate-400' : 'text-slate-500'
+                          }`}
+                        >
+                          {u.tipo || u.marcaModelo || 'Tipo sin especificar'}
+                        </p>
+                        {estaEnRuta && infoRuta && (
+                          <p className="text-[11px] font-semibold text-emerald-400 mt-1 truncate">
+                            {infoRuta.chofer ? `Operador: ${infoRuta.chofer}` : ''}
+                            {infoRuta.destino ? ` • Destino: ${infoRuta.destino}` : ''}
+                          </p>
                         )}
                       </div>
 
-                      {fotosUnidad.length > 0 ? (
-                        <div className="grid grid-cols-4 gap-1.5">
-                          {fotosUnidad.map((f) => (
-                            <button
-                              key={f.label}
-                              type="button"
-                              onClick={() =>
-                                setFotoAmpliada({
-                                  titulo: `${u.nombre} — ${f.label}`,
-                                  src: f.src!,
-                                })
-                              }
-                              className={`group relative h-14 rounded-lg overflow-hidden border ${
-                                esOscuro
-                                  ? 'border-slate-700 bg-slate-950'
-                                  : 'border-slate-300 bg-slate-100'
-                              }`}
-                              title={`Ver ${f.label}`}
-                            >
-                              <img
-                                src={f.src}
-                                alt={f.label}
-                                className="w-full h-full object-cover group-hover:scale-105 transition"
-                              />
-                              <span className="absolute bottom-0 inset-x-0 bg-slate-950/80 text-[9px] font-bold text-slate-200 px-1 truncate">
-                                {f.label}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      ) : (
-                        <div
-                          className={`text-[11px] border border-dashed rounded-xl py-2 px-3 flex items-center gap-1.5 ${
-                            esOscuro
-                              ? 'text-slate-500 bg-slate-950/60 border-slate-800'
-                              : 'text-slate-500 bg-slate-50 border-slate-300'
-                          }`}
-                        >
-                          <Camera className="w-3.5 h-3.5" />
-                          Sin fotos de frente, trasero ni costados
-                        </div>
-                      )}
-
-                      <div
-                        className={`border rounded-xl p-3 text-xs space-y-1.5 ${
-                          esOscuro
-                            ? 'bg-slate-950/75 border-slate-800'
-                            : 'bg-slate-50 border-slate-200'
+                      <span
+                        className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border shrink-0 ${
+                          incompleta
+                            ? 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+                            : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
                         }`}
                       >
-                        <div className="flex justify-between gap-2">
-                          <span className={esOscuro ? 'text-slate-400' : 'text-slate-500'}>
-                            Placas:
-                          </span>
-                          <span className="font-bold">{u.placas || 'Sin registrar'}</span>
-                        </div>
-                        <div className="flex justify-between gap-2">
-                          <span className={esOscuro ? 'text-slate-400' : 'text-slate-500'}>
-                            Serie / VIN:
-                          </span>
-                          <span className="font-semibold truncate max-w-[180px]">
-                            {u.serieVin || 'Sin registrar'}
-                          </span>
-                        </div>
-                        <div className="flex justify-between gap-2">
-                          <span className={esOscuro ? 'text-slate-400' : 'text-slate-500'}>
-                            Chofer base:
-                          </span>
-                          <span className="font-semibold truncate max-w-[180px]">
-                            {choferAsignado ? choferAsignado.nombre : 'Sin asignar'}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="space-y-1.5 text-xs">
-                        <div className="flex items-center justify-between gap-2">
-                          <span
-                            className={`inline-flex items-center gap-1 ${
-                              esOscuro ? 'text-slate-400' : 'text-slate-600'
-                            }`}
-                          >
-                            <ShieldCheck className="w-3.5 h-3.5 text-sky-500" />
-                            Seguro ({u.aseguradora || 'Sin aseguradora'}):
-                          </span>
-                          <span
-                            className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border ${seguro.clase}`}
-                          >
-                            {seguro.etiqueta}
-                          </span>
-                        </div>
-
-                        <div className="flex items-center justify-between gap-2">
-                          <span className={esOscuro ? 'text-slate-400' : 'text-slate-600'}>
-                            Tarjeta ({u.tarjetaCirculacion || 'Sin folio'}):
-                          </span>
-                          <span
-                            className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border ${tarjeta.clase}`}
-                          >
-                            {tarjeta.etiqueta}
-                          </span>
-                        </div>
-                      </div>
-
-                      {u.notas && (
-                        <p
-                          className={`text-xs border rounded-lg p-2.5 ${
-                            esOscuro
-                              ? 'text-slate-400 bg-slate-950/50 border-slate-800/80'
-                              : 'text-slate-600 bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          {u.notas}
-                        </p>
-                      )}
+                        {incompleta ? 'Por completar' : 'Completa'}
+                      </span>
                     </div>
 
+                    {fotosGaleria.length > 0 ? (
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {fotosGaleria.slice(0, 4).map((src, idx) => (
+                          <img
+                            key={idx}
+                            src={src}
+                            alt={`${u.nombre} vista ${idx + 1}`}
+                            className="w-full h-14 object-cover rounded-lg border border-slate-700/60"
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <div
+                        className={`rounded-xl border border-dashed px-3 py-2.5 text-center text-xs flex items-center justify-center gap-1.5 ${
+                          esOscuro
+                            ? 'border-slate-800 bg-slate-950/50 text-slate-400'
+                            : 'border-slate-300 bg-slate-50 text-slate-500'
+                        }`}
+                      >
+                        <Camera className="w-3.5 h-3.5 shrink-0" />
+                        <span>Sin fotos de frente, trasero ni costados</span>
+                      </div>
+                    )}
+
+                    <div
+                      className={`rounded-xl border p-3 space-y-1.5 text-xs ${
+                        esOscuro
+                          ? 'bg-slate-950/80 border-slate-800'
+                          : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <div className="flex justify-between gap-2">
+                        <span className={esOscuro ? 'text-slate-400' : 'text-slate-500'}>
+                          Placas:
+                        </span>
+                        <span className="font-bold">{u.placas || 'Sin registrar'}</span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span className={esOscuro ? 'text-slate-400' : 'text-slate-500'}>
+                          Serie / VIN:
+                        </span>
+                        <span className="font-bold truncate max-w-[170px]">
+                          {u.serie || 'Sin registrar'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span className={esOscuro ? 'text-slate-400' : 'text-slate-500'}>
+                          Chofer base:
+                        </span>
+                        <span className="font-bold">
+                          {choferBase ? choferBase.nombre : 'Sin asignar'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 text-sky-400 font-semibold truncate">
+                          <Shield className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">
+                            Seguro ({u.aseguradora || 'Sin aseguradora'}):
+                          </span>
+                        </span>
+                        <span
+                          className={`text-[11px] font-bold px-2 py-0.5 rounded-md border shrink-0 ${vigSeguro.clase}`}
+                        >
+                          {vigSeguro.etiqueta}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 text-slate-300 font-semibold truncate">
+                          <FileText className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                          <span className="truncate">
+                            Tarjeta ({u.tarjetaFolio || 'Sin folio'}):
+                          </span>
+                        </span>
+                        <span
+                          className={`text-[11px] font-bold px-2 py-0.5 rounded-md border shrink-0 ${vigTarjeta.clase}`}
+                        >
+                          {vigTarjeta.etiqueta}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
                     <button
                       type="button"
                       onClick={() => abrirModalUnidad(u)}
-                      className={`w-full border font-bold py-2.5 px-4 rounded-xl text-xs inline-flex items-center justify-center gap-1.5 transition ${
+                      className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold border inline-flex items-center justify-center gap-1.5 transition ${
                         esOscuro
-                          ? 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-white'
-                          : 'bg-slate-900 hover:bg-slate-800 border-slate-900 text-white'
+                          ? 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-100'
+                          : 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800'
                       }`}
                     >
                       <Pencil className="w-3.5 h-3.5 text-amber-400" />
-                      Completar / Editar Expediente y Fotos
+                      <span>Editar Expediente</span>
                     </button>
-                  </div>
-                );
-              })
-            )}
-          </section>
-        )}
-
-        {/* Pestaña de Choferes */}
-        {pestana === 'choferes' && (
-          <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {choferesFiltrados.length === 0 ? (
-              <div
-                className={`col-span-full border border-dashed rounded-2xl p-10 text-center ${
-                  esOscuro
-                    ? 'bg-slate-900/70 border-slate-800 text-slate-400'
-                    : 'bg-white border-slate-300 text-slate-500'
-                }`}
-              >
-                No hay choferes que coincidan con la búsqueda.
-              </div>
-            ) : (
-              choferesFiltrados.map((c) => {
-                const licencia = evaluarVigencia(c.vencimientoLicencia, esOscuro);
-                const incompleto = choferTienePendientes(c);
-                const unidadBase = unidades.find((u) => u.id === c.unidadAsignadaId);
-
-                const docsChofer = [
-                  { label: 'Lic. Frente', src: c.fotoLicenciaFrente },
-                  { label: 'Lic. Reverso', src: c.fotoLicenciaReverso },
-                  { label: 'INE Frente', src: c.fotoIneFrente },
-                  { label: 'INE Reverso', src: c.fotoIneReverso },
-                ].filter((f) => Boolean(f.src));
-
-                return (
-                  <div
-                    key={c.id}
-                    className={`border rounded-2xl p-5 flex flex-col justify-between gap-4 shadow ${
-                      esOscuro
-                        ? 'bg-slate-900/90 border-slate-800'
-                        : 'bg-white border-slate-200'
-                    }`}
-                  >
-                    <div className="space-y-3">
-                      {/* Encabezado de tarjeta con foto de rostro al lado del nombre */}
-                      <div className="flex items-start justify-between gap-2.5">
-                        <div className="flex items-center gap-3 min-w-0">
-                          {c.fotoPerfil ? (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setFotoAmpliada({
-                                  titulo: `Foto de perfil — ${c.nombre}`,
-                                  src: c.fotoPerfil!,
-                                })
-                              }
-                              title="Ver foto en grande"
-                              className="w-14 h-14 rounded-full overflow-hidden border-2 border-amber-500/70 shadow shrink-0 group relative"
-                            >
-                              <img
-                                src={c.fotoPerfil}
-                                alt={c.nombre}
-                                className="w-full h-full object-cover group-hover:scale-105 transition"
-                              />
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => abrirModalChofer(c)}
-                              title="Agregar foto de rostro"
-                              className={`w-14 h-14 rounded-full border-2 border-dashed flex flex-col items-center justify-center shrink-0 transition ${
-                                esOscuro
-                                  ? 'bg-slate-800/80 border-slate-700 text-slate-300 hover:border-amber-500'
-                                  : 'bg-slate-100 border-slate-300 text-slate-600 hover:border-amber-500'
-                              }`}
-                            >
-                              <span className="text-xs font-extrabold leading-none">
-                                {obtenerIniciales(c.nombre)}
-                              </span>
-                              <Camera className="w-3 h-3 mt-0.5 text-amber-500" />
-                            </button>
-                          )}
-
-                          <div className="min-w-0">
-                            <h2 className="text-base sm:text-lg font-bold leading-snug break-words">
-                              {c.nombre}
-                            </h2>
-                            <p
-                              className={`text-xs mt-0.5 ${
-                                esOscuro ? 'text-slate-400' : 'text-slate-500'
-                              }`}
-                            >
-                              Tel: {c.telefono || 'Sin teléfono'}
-                            </p>
-                          </div>
-                        </div>
-
-                        {incompleto ? (
-                          <span
-                            className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border shrink-0 ${
-                              esOscuro
-                                ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
-                                : 'bg-amber-50 text-amber-800 border-amber-300'
-                            }`}
-                          >
-                            Por completar
-                          </span>
-                        ) : (
-                          <span
-                            className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border shrink-0 inline-flex items-center gap-1 ${
-                              esOscuro
-                                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                                : 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                            }`}
-                          >
-                            <CheckCircle2 className="w-3 h-3" /> Completo
-                          </span>
-                        )}
-                      </div>
-
-                      {docsChofer.length > 0 ? (
-                        <div className="grid grid-cols-4 gap-1.5">
-                          {docsChofer.map((d) => (
-                            <button
-                              key={d.label}
-                              type="button"
-                              onClick={() =>
-                                setFotoAmpliada({
-                                  titulo: `${c.nombre} — ${d.label}`,
-                                  src: d.src!,
-                                })
-                              }
-                              className={`group relative h-14 rounded-lg overflow-hidden border ${
-                                esOscuro
-                                  ? 'border-slate-700 bg-slate-950'
-                                  : 'border-slate-300 bg-slate-100'
-                              }`}
-                              title={`Ver ${d.label}`}
-                            >
-                              <img
-                                src={d.src}
-                                alt={d.label}
-                                className="w-full h-full object-cover group-hover:scale-105 transition"
-                              />
-                              <span className="absolute bottom-0 inset-x-0 bg-slate-950/80 text-[9px] font-bold text-slate-200 px-1 truncate">
-                                {d.label}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      ) : (
-                        <div
-                          className={`text-[11px] border border-dashed rounded-xl py-2 px-3 flex items-center gap-1.5 ${
-                            esOscuro
-                              ? 'text-slate-500 bg-slate-950/60 border-slate-800'
-                              : 'text-slate-500 bg-slate-50 border-slate-300'
-                          }`}
-                        >
-                          <Camera className="w-3.5 h-3.5" />
-                          Sin fotos de licencia ni INE
-                        </div>
-                      )}
-
-                      <div
-                        className={`border rounded-xl p-3 text-xs space-y-1.5 ${
-                          esOscuro
-                            ? 'bg-slate-950/75 border-slate-800'
-                            : 'bg-slate-50 border-slate-200'
-                        }`}
-                      >
-                        <div className="flex justify-between gap-2">
-                          <span
-                            className={`inline-flex items-center gap-1 ${
-                              esOscuro ? 'text-slate-400' : 'text-slate-500'
-                            }`}
-                          >
-                            <IdCard className="w-3.5 h-3.5 text-sky-500" />
-                            Licencia:
-                          </span>
-                          <span className="font-bold">
-                            {c.numeroLicencia || 'Sin folio'}{' '}
-                            {c.tipoLicencia ? `(${c.tipoLicencia})` : ''}
-                          </span>
-                        </div>
-                        <div className="flex justify-between gap-2">
-                          <span className={esOscuro ? 'text-slate-400' : 'text-slate-500'}>
-                            Unidad asignada:
-                          </span>
-                          <span className="font-semibold truncate max-w-[180px]">
-                            {unidadBase ? unidadBase.nombre : 'Sin asignar'}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between gap-2 text-xs">
-                        <span className={esOscuro ? 'text-slate-400' : 'text-slate-600'}>
-                          Vigencia licencia:
-                        </span>
-                        <span
-                          className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border ${licencia.clase}`}
-                        >
-                          {licencia.etiqueta}
-                        </span>
-                      </div>
-
-                      {c.notas && (
-                        <p
-                          className={`text-xs border rounded-lg p-2.5 ${
-                            esOscuro
-                              ? 'text-slate-400 bg-slate-950/50 border-slate-800/80'
-                              : 'text-slate-600 bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          {c.notas}
-                        </p>
-                      )}
-                    </div>
 
                     <button
                       type="button"
-                      onClick={() => abrirModalChofer(c)}
-                      className={`w-full border font-bold py-2.5 px-4 rounded-xl text-xs inline-flex items-center justify-center gap-1.5 transition ${
-                        esOscuro
-                          ? 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-white'
-                          : 'bg-slate-900 hover:bg-slate-800 border-slate-900 text-white'
-                      }`}
+                      onClick={() => setUnidadQr(u)}
+                      title="Ver código QR de unidad"
+                      className="py-2 px-3 rounded-xl text-xs font-bold border border-amber-500/40 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 inline-flex items-center gap-1 transition"
                     >
-                      <Pencil className="w-3.5 h-3.5 text-amber-400" />
-                      Completar / Editar Chofer y Docs
+                      <QrCode className="w-4 h-4" />
+                      <span>QR</span>
                     </button>
                   </div>
-                );
-              })
-            )}
+                </div>
+              );
+            })}
+          </section>
+        )}
+
+        {tab === 'choferes' && (
+          <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {choferes.map((c) => {
+              const infoOcupado = estadoOperativoPorChofer.get(c.id);
+              const estaOcupado = Boolean(infoOcupado?.ocupado);
+              const incompleto = choferEstaIncompleto(c);
+              const unidadBase = unidades.find((u) => u.id === c.unidadAsignadaId);
+              const vigLicencia = estadoVigenciaFecha(c.licenciaVence);
+
+              return (
+                <div
+                  key={c.id}
+                  className={`border rounded-2xl p-4 flex flex-col justify-between space-y-3.5 transition ${
+                    estaOcupado
+                      ? esOscuro
+                        ? 'bg-slate-900/95 border-emerald-500/45 shadow-[0_0_20px_rgba(16,185,129,0.08)]'
+                        : 'bg-white border-emerald-400 shadow-sm'
+                      : claseTarjeta
+                  }`}
+                >
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-3 min-w-0">
+                        {c.fotoPerfil ? (
+                          <img
+                            src={c.fotoPerfil}
+                            alt={c.nombre}
+                            className="w-11 h-11 rounded-full object-cover border-2 border-amber-500 shrink-0"
+                          />
+                        ) : (
+                          <div className="w-11 h-11 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-sm text-amber-400 shrink-0">
+                            {c.nombre.slice(0, 2).toUpperCase()}
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h2 className="text-base font-extrabold truncate">{c.nombre}</h2>
+                            <IndicadorEstadoChofer
+                              ocupado={estaOcupado}
+                              etiquetaOcupado={infoOcupado?.tipo || 'Ocupado'}
+                            />
+                          </div>
+                          <p className="text-xs text-slate-400 truncate mt-0.5">
+                            {c.telefono || 'Sin teléfono'}
+                          </p>
+                          {estaOcupado && infoOcupado?.detalle && (
+                            <p className="text-[11px] font-semibold text-emerald-400 mt-1 truncate">
+                              {infoOcupado.detalle}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <span
+                        className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border shrink-0 ${
+                          incompleto
+                            ? 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+                            : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+                        }`}
+                      >
+                        {incompleto ? 'Por revisar' : 'Completo'}
+                      </span>
+                    </div>
+
+                    <div
+                      className={`rounded-xl border p-3 space-y-1.5 text-xs ${
+                        esOscuro
+                          ? 'bg-slate-950/80 border-slate-800'
+                          : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <div className="flex justify-between gap-2">
+                        <span className="text-slate-400">Unidad base:</span>
+                        <span className="font-bold">
+                          {unidadBase ? unidadBase.nombre : 'Sin asignar'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span className="text-slate-400">Licencia:</span>
+                        <span className="font-bold">
+                          {c.licenciaNumero || 'Sin registrar'}{' '}
+                          {c.licenciaTipo ? `(${c.licenciaTipo})` : ''}
+                        </span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span className="text-slate-400">INE:</span>
+                        <span className="font-bold">{c.ineFolio || 'Sin registrar'}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-slate-400 font-semibold">Vigencia licencia:</span>
+                      <span
+                        className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${vigLicencia.clase}`}
+                      >
+                        {vigLicencia.etiqueta}
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => abrirModalChofer(c)}
+                    className={`w-full py-2 px-3 rounded-xl text-xs font-bold border inline-flex items-center justify-center gap-1.5 transition ${
+                      esOscuro
+                        ? 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-100'
+                        : 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800'
+                    }`}
+                  >
+                    <Pencil className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Editar Chofer y Documentos</span>
+                  </button>
+                </div>
+              );
+            })}
           </section>
         )}
       </main>
 
-      {/* Modal: Completar / Editar Unidad */}
-      {unidadEditando && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-[2px] flex items-center justify-center p-4 overflow-y-auto">
+      {modalUnidadAbierto && (
+        <div
+          onClick={() => setModalUnidadAbierto(false)}
+          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+        >
           <form
             onSubmit={guardarUnidad}
-            className={`border rounded-2xl max-w-2xl w-full shadow-2xl overflow-hidden my-auto ${
-              esOscuro
-                ? 'bg-slate-900 border-slate-700 text-slate-100'
-                : 'bg-white border-slate-300 text-slate-900'
-            }`}
-          >
-            <div
-              className={`border-b px-5 py-4 flex items-center justify-between ${
-                esOscuro
-                  ? 'bg-slate-950 border-slate-800'
-                  : 'bg-slate-50 border-slate-200'
-              }`}
-            >
-              <div>
-                <h3 className="font-bold text-base">
-                  Expediente de Unidad — {unidadEditando.nombre}
-                </h3>
-                <p className={`text-xs ${esOscuro ? 'text-slate-400' : 'text-slate-500'}`}>
-                  Completa fotos (frente, trasero, costados), placas y documentación
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => !guardandoUnidad && setUnidadEditando(null)}
-                className="text-slate-400 hover:text-amber-500 p-1 rounded-lg"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4 max-h-[78vh] overflow-y-auto text-sm">
-              <div>
-                <label
-                  className={`block text-xs font-bold uppercase tracking-wide mb-2 ${
-                    esOscuro ? 'text-amber-300' : 'text-amber-700'
-                  }`}
-                >
-                  Fotografías de la unidad
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                  <SlotFoto
-                    etiqueta="Frente"
-                    valor={formUnidad.fotoFrente}
-                    esOscuro={esOscuro}
-                    onCambiar={(v) => setFormUnidad({ ...formUnidad, fotoFrente: v })}
-                    onAmpliar={(titulo, src) => setFotoAmpliada({ titulo, src })}
-                  />
-                  <SlotFoto
-                    etiqueta="Trasero"
-                    valor={formUnidad.fotoTrasero}
-                    esOscuro={esOscuro}
-                    onCambiar={(v) => setFormUnidad({ ...formUnidad, fotoTrasero: v })}
-                    onAmpliar={(titulo, src) => setFotoAmpliada({ titulo, src })}
-                  />
-                  <SlotFoto
-                    etiqueta="Costado Izquierdo"
-                    valor={formUnidad.fotoCostadoIzq}
-                    esOscuro={esOscuro}
-                    onCambiar={(v) => setFormUnidad({ ...formUnidad, fotoCostadoIzq: v })}
-                    onAmpliar={(titulo, src) => setFotoAmpliada({ titulo, src })}
-                  />
-                  <SlotFoto
-                    etiqueta="Costado Derecho"
-                    valor={formUnidad.fotoCostadoDer}
-                    esOscuro={esOscuro}
-                    onCambiar={(v) => setFormUnidad({ ...formUnidad, fotoCostadoDer: v })}
-                    onAmpliar={(titulo, src) => setFotoAmpliada({ titulo, src })}
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold mb-1">Tipo de unidad</label>
-                  <input
-                    type="text"
-                    placeholder="Ej. Camioneta, Camión, Refrigerada"
-                    value={formUnidad.tipoUnidad}
-                    onChange={(e) =>
-                      setFormUnidad({ ...formUnidad, tipoUnidad: e.target.value })
-                    }
-                    className={claseInputModal}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Estatus operativo</label>
-                  <select
-                    value={formUnidad.estatusOperativo}
-                    onChange={(e) =>
-                      setFormUnidad({
-                        ...formUnidad,
-                        estatusOperativo: e.target.value as 'ACTIVA' | 'MANTENIMIENTO',
-                      })
-                    }
-                    className={claseInputModal}
-                  >
-                    <option value="ACTIVA">Activa</option>
-                    <option value="MANTENIMIENTO">En mantenimiento</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Placas</label>
-                  <input
-                    type="text"
-                    placeholder="Ej. VM-1234-A"
-                    value={formUnidad.placas}
-                    onChange={(e) => setFormUnidad({ ...formUnidad, placas: e.target.value })}
-                    className={`${claseInputModal} uppercase`}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Número de serie / VIN</label>
-                  <input
-                    type="text"
-                    placeholder="VIN o serie"
-                    value={formUnidad.serieVin}
-                    onChange={(e) => setFormUnidad({ ...formUnidad, serieVin: e.target.value })}
-                    className={`${claseInputModal} uppercase`}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Marca y modelo</label>
-                  <input
-                    type="text"
-                    placeholder="Ej. Nissan NP300"
-                    value={formUnidad.marcaModelo}
-                    onChange={(e) =>
-                      setFormUnidad({ ...formUnidad, marcaModelo: e.target.value })
-                    }
-                    className={claseInputModal}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Año</label>
-                  <input
-                    type="text"
-                    placeholder="Ej. 2024"
-                    value={formUnidad.anio}
-                    onChange={(e) => setFormUnidad({ ...formUnidad, anio: e.target.value })}
-                    className={claseInputModal}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Aseguradora</label>
-                  <input
-                    type="text"
-                    placeholder="Ej. QUALITAS, GNP, AXA"
-                    value={formUnidad.aseguradora}
-                    onChange={(e) =>
-                      setFormUnidad({ ...formUnidad, aseguradora: e.target.value })
-                    }
-                    className={claseInputModal}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Número de póliza</label>
-                  <input
-                    type="text"
-                    placeholder="Folio de póliza"
-                    value={formUnidad.polizaSeguro}
-                    onChange={(e) =>
-                      setFormUnidad({ ...formUnidad, polizaSeguro: e.target.value })
-                    }
-                    className={claseInputModal}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Vencimiento de seguro</label>
-                  <input
-                    type="date"
-                    value={formUnidad.vencimientoSeguro}
-                    onChange={(e) =>
-                      setFormUnidad({ ...formUnidad, vencimientoSeguro: e.target.value })
-                    }
-                    className={claseInputModal}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Tarjeta de circulación</label>
-                  <input
-                    type="text"
-                    placeholder="Folio / referencia"
-                    value={formUnidad.tarjetaCirculacion}
-                    onChange={(e) =>
-                      setFormUnidad({ ...formUnidad, tarjetaCirculacion: e.target.value })
-                    }
-                    className={claseInputModal}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">
-                    Vencimiento tarjeta / refrendo
-                  </label>
-                  <input
-                    type="date"
-                    value={formUnidad.vencimientoTarjeta}
-                    onChange={(e) =>
-                      setFormUnidad({ ...formUnidad, vencimientoTarjeta: e.target.value })
-                    }
-                    className={claseInputModal}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">
-                    Chofer asignado por defecto
-                  </label>
-                  <select
-                    value={formUnidad.choferDefaultId}
-                    onChange={(e) =>
-                      setFormUnidad({ ...formUnidad, choferDefaultId: e.target.value })
-                    }
-                    className={claseInputModal}
-                  >
-                    <option value="">Sin asignar</option>
-                    {choferes.map((ch) => (
-                      <option key={ch.id} value={ch.id}>
-                        {ch.nombre}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold mb-1">Observaciones de flota</label>
-                <textarea
-                  rows={2}
-                  placeholder="Detalles adicionales de la unidad..."
-                  value={formUnidad.notas}
-                  onChange={(e) => setFormUnidad({ ...formUnidad, notas: e.target.value })}
-                  className={`${claseInputModal} resize-none`}
-                />
-              </div>
-
-              <div className="flex justify-end gap-2.5 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setUnidadEditando(null)}
-                  disabled={guardandoUnidad}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold ${
-                    esOscuro
-                      ? 'bg-slate-800 hover:bg-slate-700 text-slate-200'
-                      : 'bg-slate-200 hover:bg-slate-300 text-slate-800'
-                  }`}
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={guardandoUnidad}
-                  className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white inline-flex items-center gap-1.5"
-                >
-                  <Save className="w-4 h-4" />
-                  {guardandoUnidad ? 'Guardando...' : 'Guardar Expediente'}
-                </button>
-              </div>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* Modal: Completar / Editar Chofer */}
-      {choferEditando && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-[2px] flex items-center justify-center p-4 overflow-y-auto">
-          <form
-            onSubmit={guardarChofer}
-            className={`border rounded-2xl max-w-2xl w-full shadow-2xl overflow-hidden my-auto ${
-              esOscuro
-                ? 'bg-slate-900 border-slate-700 text-slate-100'
-                : 'bg-white border-slate-300 text-slate-900'
-            }`}
-          >
-            <div
-              className={`border-b px-5 py-4 flex items-center justify-between ${
-                esOscuro
-                  ? 'bg-slate-950 border-slate-800'
-                  : 'bg-slate-50 border-slate-200'
-              }`}
-            >
-              <div>
-                <h3 className="font-bold text-base">
-                  Datos y Documentos — {choferEditando.nombre}
-                </h3>
-                <p className={`text-xs ${esOscuro ? 'text-slate-400' : 'text-slate-500'}`}>
-                  Toma foto de perfil, sube Licencia e INE y completa sus datos
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => !guardandoChofer && setChoferEditando(null)}
-                className="text-slate-400 hover:text-amber-500 p-1 rounded-lg"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4 max-h-[78vh] overflow-y-auto text-sm">
-              {/* Foto de rostro / perfil del chofer */}
-              <div
-                className={`border rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-4 ${
-                  esOscuro
-                    ? 'bg-slate-950/80 border-slate-800'
-                    : 'bg-slate-50 border-slate-200'
-                }`}
-              >
-                <div className="flex items-center gap-3.5">
-                  {formChofer.fotoPerfil ? (
-                    <div className="relative">
-                      <img
-                        src={formChofer.fotoPerfil}
-                        alt="Foto del chofer"
-                        className="w-16 h-16 rounded-full object-cover border-2 border-amber-500 shadow"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setFormChofer({ ...formChofer, fotoPerfil: '' })}
-                        title="Quitar foto de perfil"
-                        className="absolute -top-1 -right-1 bg-rose-600 text-white p-1 rounded-full shadow hover:bg-rose-500"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div
-                      className={`w-16 h-16 rounded-full border-2 border-dashed flex items-center justify-center font-extrabold text-sm ${
-                        esOscuro
-                          ? 'bg-slate-900 border-slate-700 text-slate-400'
-                          : 'bg-white border-slate-300 text-slate-500'
-                      }`}
-                    >
-                      {obtenerIniciales(choferEditando.nombre)}
-                    </div>
-                  )}
-
-                  <div>
-                    <p
-                      className={`text-xs font-bold uppercase tracking-wide ${
-                        esOscuro ? 'text-amber-300' : 'text-amber-700'
-                      }`}
-                    >
-                      Foto de perfil (rostro)
-                    </p>
-                    <p className={`text-xs ${esOscuro ? 'text-slate-400' : 'text-slate-500'}`}>
-                      Aparece junto al nombre en la tarjeta del chofer
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <label className="px-3 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white cursor-pointer inline-flex items-center gap-1.5 shadow-sm transition">
-                    <Camera className="w-4 h-4" />
-                    <span>{procesandoPerfil ? 'Procesando...' : 'Tomar foto'}</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="user"
-                      onChange={handleFotoPerfilArchivo}
-                      disabled={procesandoPerfil}
-                      className="hidden"
-                    />
-                  </label>
-
-                  <label
-                    className={`px-3 py-2 rounded-xl text-xs font-bold border cursor-pointer inline-flex items-center gap-1.5 transition ${
-                      esOscuro
-                        ? 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
-                        : 'bg-white hover:bg-slate-100 border-slate-300 text-slate-800'
-                    }`}
-                  >
-                    <Upload className="w-4 h-4" />
-                    <span>Subir</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleFotoPerfilArchivo}
-                      disabled={procesandoPerfil}
-                      className="hidden"
-                    />
-                  </label>
-                </div>
-              </div>
-
-              <div>
-                <label
-                  className={`block text-xs font-bold uppercase tracking-wide mb-2 ${
-                    esOscuro ? 'text-amber-300' : 'text-amber-700'
-                  }`}
-                >
-                  Documentos oficiales (Licencia e INE)
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                  <SlotFoto
-                    etiqueta="Licencia (Frente)"
-                    valor={formChofer.fotoLicenciaFrente}
-                    esOscuro={esOscuro}
-                    onCambiar={(v) => setFormChofer({ ...formChofer, fotoLicenciaFrente: v })}
-                    onAmpliar={(titulo, src) => setFotoAmpliada({ titulo, src })}
-                  />
-                  <SlotFoto
-                    etiqueta="Licencia (Reverso)"
-                    valor={formChofer.fotoLicenciaReverso}
-                    esOscuro={esOscuro}
-                    onCambiar={(v) => setFormChofer({ ...formChofer, fotoLicenciaReverso: v })}
-                    onAmpliar={(titulo, src) => setFotoAmpliada({ titulo, src })}
-                  />
-                  <SlotFoto
-                    etiqueta="INE (Frente)"
-                    valor={formChofer.fotoIneFrente}
-                    esOscuro={esOscuro}
-                    onCambiar={(v) => setFormChofer({ ...formChofer, fotoIneFrente: v })}
-                    onAmpliar={(titulo, src) => setFotoAmpliada({ titulo, src })}
-                  />
-                  <SlotFoto
-                    etiqueta="INE (Reverso)"
-                    valor={formChofer.fotoIneReverso}
-                    esOscuro={esOscuro}
-                    onCambiar={(v) => setFormChofer({ ...formChofer, fotoIneReverso: v })}
-                    onAmpliar={(titulo, src) => setFotoAmpliada({ titulo, src })}
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold mb-1">Teléfono</label>
-                  <input
-                    type="tel"
-                    placeholder="Ej. 9931234567"
-                    value={formChofer.telefono}
-                    onChange={(e) => setFormChofer({ ...formChofer, telefono: e.target.value })}
-                    className={claseInputModal}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Número de licencia</label>
-                  <input
-                    type="text"
-                    placeholder="Folio de licencia"
-                    value={formChofer.numeroLicencia}
-                    onChange={(e) =>
-                      setFormChofer({ ...formChofer, numeroLicencia: e.target.value })
-                    }
-                    className={`${claseInputModal} uppercase`}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Tipo de licencia</label>
-                  <input
-                    type="text"
-                    placeholder="Ej. Tipo B, Federal, Chofer"
-                    value={formChofer.tipoLicencia}
-                    onChange={(e) =>
-                      setFormChofer({ ...formChofer, tipoLicencia: e.target.value })
-                    }
-                    className={`${claseInputModal} uppercase`}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Vencimiento de licencia</label>
-                  <input
-                    type="date"
-                    value={formChofer.vencimientoLicencia}
-                    onChange={(e) =>
-                      setFormChofer({ ...formChofer, vencimientoLicencia: e.target.value })
-                    }
-                    className={claseInputModal}
-                  />
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-bold mb-1">Unidad asignada</label>
-                  <select
-                    value={formChofer.unidadAsignadaId}
-                    onChange={(e) =>
-                      setFormChofer({ ...formChofer, unidadAsignadaId: e.target.value })
-                    }
-                    className={claseInputModal}
-                  >
-                    <option value="">Sin unidad asignada</option>
-                    {unidades.map((un) => (
-                      <option key={un.id} value={un.id}>
-                        {un.nombre} {un.placas ? `(${un.placas})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold mb-1">Notas</label>
-                <textarea
-                  rows={2}
-                  placeholder="Observaciones del operador..."
-                  value={formChofer.notas}
-                  onChange={(e) => setFormChofer({ ...formChofer, notas: e.target.value })}
-                  className={`${claseInputModal} resize-none`}
-                />
-              </div>
-
-              <div className="flex justify-end gap-2.5 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setChoferEditando(null)}
-                  disabled={guardandoChofer}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold ${
-                    esOscuro
-                      ? 'bg-slate-800 hover:bg-slate-700 text-slate-200'
-                      : 'bg-slate-200 hover:bg-slate-300 text-slate-800'
-                  }`}
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={guardandoChofer}
-                  className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white inline-flex items-center gap-1.5"
-                >
-                  <Save className="w-4 h-4" />
-                  {guardandoChofer ? 'Guardando...' : 'Guardar Chofer'}
-                </button>
-              </div>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* Visor de imagen ampliada */}
-      {fotoAmpliada && (
-        <div
-          onClick={() => setFotoAmpliada(null)}
-          className="fixed inset-0 z-[60] bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4"
-        >
-          <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full overflow-hidden shadow-2xl"
+            className="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full max-h-[92vh] overflow-y-auto shadow-2xl text-slate-100"
           >
-            <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-              <span className="text-sm font-bold text-white">{fotoAmpliada.titulo}</span>
+            <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between sticky top-0 bg-slate-900 z-10">
+              <div>
+                <h3 className="font-bold text-base">
+                  {unidadEditando
+                    ? `Expediente: ${unidadEditando.nombre}`
+                    : 'Registrar Nueva Unidad'}
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Peso total de fotos: {pesoTotalFotosUnidadKB} KB / 850 KB máx.
+                </p>
+              </div>
               <button
                 type="button"
-                onClick={() => setFotoAmpliada(null)}
+                onClick={() => setModalUnidadAbierto(false)}
                 className="text-slate-400 hover:text-white p-1 rounded-lg"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="bg-slate-950 flex items-center justify-center p-4 max-h-[80vh]">
-              <img
-                src={fotoAmpliada.src}
-                alt={fotoAmpliada.titulo}
-                className="max-h-[72vh] w-auto object-contain rounded-lg"
-              />
+
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1">Nombre de unidad *</label>
+                  <input
+                    type="text"
+                    required
+                    value={uNombre}
+                    onChange={(e) => setUNombre(e.target.value)}
+                    placeholder="Ej. Saveiro Camper"
+                    className={claseCampo}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">Placas</label>
+                  <input
+                    type="text"
+                    value={uPlacas}
+                    onChange={(e) => setUPlacas(e.target.value)}
+                    placeholder="Ej. VM-1234-A"
+                    className={claseCampo}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">Marca y Modelo</label>
+                  <input
+                    type="text"
+                    value={uMarcaModelo}
+                    onChange={(e) => setUMarcaModelo(e.target.value)}
+                    placeholder="Ej. Nissan NP300"
+                    className={claseCampo}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">Tipo / Carrocería</label>
+                  <input
+                    type="text"
+                    value={uTipo}
+                    onChange={(e) => setUTipo(e.target.value)}
+                    placeholder="Ej. Caja seca / Refrigerada / Pickup"
+                    className={claseCampo}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">Serie / VIN</label>
+                  <input
+                    type="text"
+                    value={uSerie}
+                    onChange={(e) => setUSerie(e.target.value)}
+                    placeholder="17 dígitos"
+                    className={claseCampo}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">Chofer base asignado</label>
+                  <select
+                    value={uChoferDefaultId}
+                    onChange={(e) => setUChoferDefaultId(e.target.value)}
+                    className={claseCampo}
+                  >
+                    <option value="">-- Sin chofer fijo --</option>
+                    {choferes.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.nombre}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-800 pt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1">Aseguradora</label>
+                  <input
+                    type="text"
+                    value={uAseguradora}
+                    onChange={(e) => setUAseguradora(e.target.value)}
+                    placeholder="Ej. Quálitas"
+                    className={claseCampo}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">No. Póliza</label>
+                  <input
+                    type="text"
+                    value={uPoliza}
+                    onChange={(e) => setUPoliza(e.target.value)}
+                    className={claseCampo}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">Vencimiento Seguro</label>
+                  <input
+                    type="date"
+                    value={uSeguroVence}
+                    onChange={(e) => setUSeguroVence(e.target.value)}
+                    className={claseCampo}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1">Folio Tarjeta Circulación</label>
+                  <input
+                    type="text"
+                    value={uTarjetaFolio}
+                    onChange={(e) => setUTarjetaFolio(e.target.value)}
+                    className={claseCampo}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">Vencimiento Tarjeta</label>
+                  <input
+                    type="date"
+                    value={uTarjetaVence}
+                    onChange={(e) => setUTarjetaVence(e.target.value)}
+                    className={claseCampo}
+                  />
+                </div>
+              </div>
+
+              <div className="border-t border-slate-800 pt-3 space-y-2">
+                <p className="text-xs font-bold text-amber-400">
+                  Evidencia fotográfica de la unidad y documentos
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                  {(
+                    [
+                      ['frente', 'Frente'],
+                      ['trasera', 'Parte trasera'],
+                      ['costadoIzq', 'Costado izquierdo'],
+                      ['costadoDer', 'Costado derecho'],
+                      ['tarjetaCirculacion', 'Tarjeta circulación'],
+                      ['polizaSeguro', 'Póliza seguro'],
+                    ] as const
+                  ).map(([campo, etiqueta]) => {
+                    const imgActual = uFotos[campo];
+                    return (
+                      <div
+                        key={campo}
+                        className="border border-slate-800 bg-slate-950/70 rounded-xl p-2 space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between text-[11px] font-bold">
+                          <span>{etiqueta}</span>
+                          {imgActual && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setUFotos((prev) => ({ ...prev, [campo]: undefined }))
+                              }
+                              className="text-rose-400 hover:text-rose-300"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+
+                        {imgActual ? (
+                          <img
+                            src={imgActual}
+                            alt={etiqueta}
+                            className="w-full h-20 object-cover rounded-lg border border-slate-700"
+                          />
+                        ) : (
+                          <label className="h-20 border border-dashed border-slate-700 rounded-lg flex flex-col items-center justify-center text-[11px] text-slate-400 hover:border-amber-500 hover:text-amber-300 cursor-pointer transition">
+                            <Camera className="w-4 h-4 mb-1" />
+                            <span>Subir / Foto</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => handleSubirFotoUnidad(campo, e)}
+                              className="hidden"
+                            />
+                          </label>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setModalUnidadAbierto(false)}
+                  className="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={guardandoUnidad}
+                  className="px-4 py-2.5 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white inline-flex items-center gap-1.5"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{guardandoUnidad ? 'Guardando...' : 'Guardar Unidad'}</span>
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {unidadQr && (
+        <div
+          onClick={() => setUnidadQr(null)}
+          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full overflow-hidden shadow-2xl text-slate-100"
+          >
+            <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+              <div>
+                <h3 className="font-bold text-base">QR de Unidad</h3>
+                <p className="text-xs text-amber-400 font-semibold">{unidadQr.nombre}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setUnidadQr(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 flex flex-col items-center text-center space-y-4">
+              <div className="bg-white p-3 rounded-2xl shadow">
+                <img
+                  src={imgQrApi}
+                  alt={`QR ${unidadQr.nombre}`}
+                  className="w-56 h-56 object-contain"
+                />
+              </div>
+
+              <p className="text-xs text-slate-400">
+                Al escanear este QR desde el celular, abrirá directo el Portal del Chofer con{' '}
+                <strong className="text-white">{unidadQr.nombre}</strong> seleccionada.
+              </p>
+
+              <div className="grid grid-cols-2 gap-2 w-full">
+                <a
+                  href={imgQrApi}
+                  download={`QR-${unidadQr.nombre.replace(/\s+/g, '-')}.png`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="py-2.5 px-3 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white inline-flex items-center justify-center gap-1.5"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Descargar QR</span>
+                </a>
+                <Link
+                  href={`/chofer?unidad=${unidadQr.id}`}
+                  className="py-2.5 px-3 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 inline-flex items-center justify-center gap-1.5"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  <span>Abrir Portal</span>
+                </Link>
+              </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {modalChoferAbierto && (
+        <div
+          onClick={() => setModalChoferAbierto(false)}
+          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+        >
+          <form
+            onSubmit={guardarChofer}
+            onClick={(e) => e.stopPropagation()}
+            className="bg-slate-900 border border-slate-700 rounded-2xl max-w-xl w-full max-h-[92vh] overflow-y-auto shadow-2xl text-slate-100"
+          >
+            <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between sticky top-0 bg-slate-900 z-10">
+              <h3 className="font-bold text-base">
+                {choferEditando ? `Chofer: ${choferEditando.nombre}` : 'Registrar Nuevo Chofer'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setModalChoferAbierto(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1">Nombre completo *</label>
+                  <input
+                    type="text"
+                    required
+                    value={cNombre}
+                    onChange={(e) => setCNombre(e.target.value)}
+                    className={claseCampo}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">Teléfono</label>
+                  <input
+                    type="tel"
+                    value={cTelefono}
+                    onChange={(e) => setCTelefono(e.target.value)}
+                    className={claseCampo}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">Unidad base asignada</label>
+                  <select
+                    value={cUnidadAsignadaId}
+                    onChange={(e) => setCUnidadAsignadaId(e.target.value)}
+                    className={claseCampo}
+                  >
+                    <option value="">-- Sin unidad fija --</option>
+                    {unidades.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.nombre}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">Folio INE</label>
+                  <input
+                    type="text"
+                    value={cIneFolio}
+                    onChange={(e) => setCIneFolio(e.target.value)}
+                    className={claseCampo}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">No. Licencia</label>
+                  <input
+                    type="text"
+                    value={cLicenciaNumero}
+                    onChange={(e) => setCLicenciaNumero(e.target.value)}
+                    className={claseCampo}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">Tipo Licencia</label>
+                  <input
+                    type="text"
+                    value={cLicenciaTipo}
+                    onChange={(e) => setCLicenciaTipo(e.target.value)}
+                    placeholder="Ej. Chofer / Federal B"
+                    className={claseCampo}
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold mb-1">Vencimiento Licencia</label>
+                  <input
+                    type="date"
+                    value={cLicenciaVence}
+                    onChange={(e) => setCLicenciaVence(e.target.value)}
+                    className={claseCampo}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2.5 border-t border-slate-800 pt-3">
+                {(
+                  [
+                    ['perfil', 'Foto perfil', cFotoPerfil, () => setCFotoPerfil('')],
+                    ['licencia', 'Foto licencia', cFotoLicencia, () => setCFotoLicencia('')],
+                    ['ine', 'Foto INE', cFotoIne, () => setCFotoIne('')],
+                  ] as const
+                ).map(([campo, etiqueta, valor, limpiar]) => (
+                  <div
+                    key={campo}
+                    className="border border-slate-800 bg-slate-950/70 rounded-xl p-2 space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between text-[11px] font-bold">
+                      <span>{etiqueta}</span>
+                      {valor && (
+                        <button
+                          type="button"
+                          onClick={limpiar}
+                          className="text-rose-400 hover:text-rose-300"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                    {valor ? (
+                      <img
+                        src={valor}
+                        alt={etiqueta}
+                        className="w-full h-20 object-cover rounded-lg border border-slate-700"
+                      />
+                    ) : (
+                      <label className="h-20 border border-dashed border-slate-700 rounded-lg flex flex-col items-center justify-center text-[11px] text-slate-400 hover:border-amber-500 cursor-pointer">
+                        <Camera className="w-4 h-4 mb-1" />
+                        <span>Subir</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => handleSubirFotoChofer(campo, e)}
+                          className="hidden"
+                        />
+                      </label>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setModalChoferAbierto(false)}
+                  className="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={guardandoChofer}
+                  className="px-4 py-2.5 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white inline-flex items-center gap-1.5"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{guardandoChofer ? 'Guardando...' : 'Guardar Chofer'}</span>
+                </button>
+              </div>
+            </div>
+          </form>
         </div>
       )}
     </div>
