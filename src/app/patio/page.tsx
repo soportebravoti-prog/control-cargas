@@ -27,6 +27,8 @@ import {
   History,
   ChevronDown,
   ChevronUp,
+  Flag,
+  Truck,
 } from 'lucide-react';
 
 export default function PatioPage() {
@@ -47,43 +49,57 @@ export default function PatioPage() {
   const [nuevoDestino, setNuevoDestino] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Modal cuando seleccionan una unidad que sigue EN_RUTA
+  const [cargaEnRutaPorFinalizar, setCargaEnRutaPorFinalizar] = useState<Carga | null>(null);
+  const [finalizandoId, setFinalizandoId] = useState<string | null>(null);
+
   // Modal de cancelación integrado
   const [cargaACancelar, setCargaACancelar] = useState<Carga | null>(null);
   const [motivoCancelacion, setMotivoCancelacion] = useState('');
   const [cancelandoId, setCancelandoId] = useState<string | null>(null);
 
+  const [mostrarFinalizadas, setMostrarFinalizadas] = useState(false);
   const [mostrarCanceladas, setMostrarCanceladas] = useState(false);
 
   // Alertas sonoras en Patio
   const audioCargandoRef = useRef<HTMLAudioElement | null>(null);
   const audioSalidaRef = useRef<HTMLAudioElement | null>(null);
+  const audioFinalizadoRef = useRef<HTMLAudioElement | null>(null);
   const estadosPreviosRef = useRef<Record<string, Carga['estado']>>({});
   const cargaInicialRef = useRef<boolean>(true);
 
   useEffect(() => {
     audioCargandoRef.current = new Audio('/sonido-cargando.mp3');
     audioSalidaRef.current = new Audio('/sonido-salida.mp3');
+    audioFinalizadoRef.current = new Audio('/sonido-finalizado.mp3');
   }, []);
 
   const desbloquearAudios = () => {
-    [audioCargandoRef.current, audioSalidaRef.current].forEach((audio) => {
-      if (!audio) return;
-      audio.volume = 0;
-      audio
-        .play()
-        .then(() => {
-          audio.pause();
-          audio.currentTime = 0;
-          audio.volume = 1;
-        })
-        .catch(() => {
-          audio.volume = 1;
-        });
-    });
+    [audioCargandoRef.current, audioSalidaRef.current, audioFinalizadoRef.current].forEach(
+      (audio) => {
+        if (!audio) return;
+        audio.volume = 0;
+        audio
+          .play()
+          .then(() => {
+            audio.pause();
+            audio.currentTime = 0;
+            audio.volume = 1;
+          })
+          .catch(() => {
+            audio.volume = 1;
+          });
+      }
+    );
   };
 
-  const reproducirTono = (tipo: 'CARGANDO' | 'SALIDA') => {
-    const audio = tipo === 'CARGANDO' ? audioCargandoRef.current : audioSalidaRef.current;
+  const reproducirTono = (tipo: 'CARGANDO' | 'SALIDA' | 'FINALIZADA') => {
+    const audio =
+      tipo === 'FINALIZADA'
+        ? audioFinalizadoRef.current
+        : tipo === 'SALIDA'
+        ? audioSalidaRef.current
+        : audioCargandoRef.current;
     if (!audio) return;
     audio.volume = 1;
     audio.currentTime = 0;
@@ -144,6 +160,7 @@ export default function PatioPage() {
       } else {
         let huboNuevaCarga = false;
         let huboNuevaSalida = false;
+        let huboFinalizacion = false;
 
         list.forEach((c) => {
           const previo = mapaActual[c.id];
@@ -151,6 +168,8 @@ export default function PatioPage() {
             huboNuevaCarga = true;
           } else if (previo && previo !== 'EN_RUTA' && c.estado === 'EN_RUTA') {
             huboNuevaSalida = true;
+          } else if (previo && previo !== 'FINALIZADA' && c.estado === 'FINALIZADA') {
+            huboFinalizacion = true;
           }
         });
 
@@ -162,7 +181,9 @@ export default function PatioPage() {
           estadosPreviosRef.current = siguienteMapa;
         }
 
-        if (huboNuevaSalida) {
+        if (huboFinalizacion) {
+          reproducirTono('FINALIZADA');
+        } else if (huboNuevaSalida) {
           reproducirTono('SALIDA');
         } else if (huboNuevaCarga) {
           reproducirTono('CARGANDO');
@@ -189,9 +210,41 @@ export default function PatioPage() {
   const handleSelectUnidad = (id: string) => {
     setUnidadId(id);
     const unidad = unidades.find((u) => u.id === id);
-    if (unidad?.choferDefaultId) {
+    if (!unidad) return;
+
+    if (unidad.choferDefaultId) {
       setChoferId(unidad.choferDefaultId);
     }
+
+    const activaEnRuta = cargasHoy.find(
+      (c) => c.unidadNombre === unidad.nombre && c.estado === 'EN_RUTA'
+    );
+    if (activaEnRuta) {
+      setCargaEnRutaPorFinalizar(activaEnRuta);
+    }
+  };
+
+  const finalizarRuta = async (cargaId: string) => {
+    try {
+      setFinalizandoId(cargaId);
+      await updateDoc(doc(db, 'cargas', cargaId), {
+        estado: 'FINALIZADA',
+        horaRegreso: new Date().toISOString(),
+      });
+    } finally {
+      setFinalizandoId(null);
+    }
+  };
+
+  const confirmarFinalizarDesdeSelector = async () => {
+    if (!cargaEnRutaPorFinalizar) return;
+    await finalizarRuta(cargaEnRutaPorFinalizar.id);
+    setCargaEnRutaPorFinalizar(null);
+  };
+
+  const rechazarFinalizarDesdeSelector = () => {
+    setCargaEnRutaPorFinalizar(null);
+    setUnidadId('');
   };
 
   const agregarRemision = () => {
@@ -203,7 +256,9 @@ export default function PatioPage() {
 
   const unidadSeleccionada = unidades.find((u) => u.id === unidadId);
   const vueltaCalculada = unidadSeleccionada
-    ? cargasHoy.filter((c) => c.unidadNombre === unidadSeleccionada.nombre).length + 1
+    ? cargasHoy.filter(
+        (c) => c.unidadNombre === unidadSeleccionada.nombre && c.estado !== 'CANCELADA'
+      ).length + 1
     : 1;
 
   const iniciarCarga = async (e: React.FormEvent) => {
@@ -212,6 +267,14 @@ export default function PatioPage() {
 
     const unidad = unidades.find((u) => u.id === unidadId)!;
     const chofer = choferes.find((c) => c.id === choferId)!;
+
+    const sigueEnRuta = cargasHoy.find(
+      (c) => c.unidadNombre === unidad.nombre && c.estado === 'EN_RUTA'
+    );
+    if (sigueEnRuta) {
+      setCargaEnRutaPorFinalizar(sigueEnRuta);
+      return;
+    }
 
     const listaFinal = remisionInput.trim()
       ? Array.from(new Set([...remisiones, remisionInput.trim().toUpperCase()]))
@@ -227,6 +290,7 @@ export default function PatioPage() {
       estado: 'CARGANDO',
       horaInicio: new Date().toISOString(),
       horaSalida: null,
+      horaRegreso: null,
       fechaOperacion: hoy,
     });
 
@@ -310,6 +374,7 @@ export default function PatioPage() {
 
   const cargandoAhora = cargasHoy.filter((c) => c.estado === 'CARGANDO');
   const enRutaHoy = cargasHoy.filter((c) => c.estado === 'EN_RUTA');
+  const finalizadasHoy = cargasHoy.filter((c) => c.estado === 'FINALIZADA');
   const canceladasHoy = cargasHoy.filter((c) => c.estado === 'CANCELADA');
 
   return (
@@ -385,11 +450,16 @@ export default function PatioPage() {
                 className="w-full rounded-xl border border-slate-300 p-3 text-base bg-white focus:ring-2 focus:ring-amber-500 outline-none"
               >
                 <option value="">Seleccionar unidad...</option>
-                {unidades.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.nombre} {u.placas ? `(${u.placas})` : ''}
-                  </option>
-                ))}
+                {unidades.map((u) => {
+                  const estaEnRuta = cargasHoy.some(
+                    (c) => c.unidadNombre === u.nombre && c.estado === 'EN_RUTA'
+                  );
+                  return (
+                    <option key={u.id} value={u.id}>
+                      {u.nombre} {u.placas ? `(${u.placas})` : ''} {estaEnRuta ? '• [En ruta]' : ''}
+                    </option>
+                  );
+                })}
               </select>
             </div>
 
@@ -633,7 +703,7 @@ export default function PatioPage() {
 
           {enRutaHoy.length === 0 ? (
             <div className="bg-white rounded-2xl p-8 text-center text-slate-400 border border-dashed border-slate-300">
-              No hay unidades despachadas hoy.
+              No hay unidades en ruta en este momento.
             </div>
           ) : (
             enRutaHoy.map((carga) => (
@@ -767,20 +837,103 @@ export default function PatioPage() {
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => abrirModalCancelacion(carga)}
-                  disabled={cancelandoId === carga.id}
-                  className="w-full bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-700 border border-red-200 font-bold py-2.5 rounded-xl flex items-center justify-center gap-2 text-sm transition"
-                >
-                  <Ban className="w-4 h-4" />
-                  {cancelandoId === carga.id ? 'Cancelando...' : 'Cancelar Salida'}
-                </button>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => finalizarRuta(carga.id)}
+                    disabled={finalizandoId === carga.id}
+                    className="w-full bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl flex items-center justify-center gap-2 text-sm shadow-sm transition"
+                  >
+                    <Flag className="w-4 h-4" />
+                    {finalizandoId === carga.id ? 'Finalizando...' : 'Finalizar Ruta'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => abrirModalCancelacion(carga)}
+                    disabled={cancelandoId === carga.id}
+                    className="w-full bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-700 border border-red-200 font-bold py-2.5 rounded-xl flex items-center justify-center gap-2 text-sm transition"
+                  >
+                    <Ban className="w-4 h-4" />
+                    {cancelandoId === carga.id ? 'Cancelando...' : 'Cancelar Salida'}
+                  </button>
+                </div>
               </div>
             ))
           )}
         </div>
 
+        {/* Historial de rutas finalizadas hoy */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setMostrarFinalizadas(!mostrarFinalizadas)}
+            className="w-full px-5 py-4 flex items-center justify-between text-left hover:bg-slate-50 transition"
+          >
+            <div className="flex items-center gap-2">
+              <Flag className="w-4 h-4 text-sky-600" />
+              <span className="font-bold text-sm text-slate-700">
+                Rutas Finalizadas Hoy ({finalizadasHoy.length})
+              </span>
+            </div>
+            {mostrarFinalizadas ? (
+              <ChevronUp className="w-4 h-4 text-slate-500" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-slate-500" />
+            )}
+          </button>
+
+          {mostrarFinalizadas && (
+            <div className="px-5 pb-5 pt-1 border-t border-slate-100 space-y-3">
+              {finalizadasHoy.length === 0 ? (
+                <p className="text-xs text-slate-400 py-3 text-center">
+                  Aún no hay rutas finalizadas hoy.
+                </p>
+              ) : (
+                finalizadasHoy.map((carga) => (
+                  <div
+                    key={carga.id}
+                    className="bg-sky-50/60 border border-sky-200/80 rounded-xl p-3.5 space-y-1.5 text-sm"
+                  >
+                    <div className="flex justify-between items-start gap-2">
+                      <div>
+                        <span className="font-bold text-slate-800">{carga.unidadNombre}</span>{' '}
+                        <span className="text-xs text-slate-500">
+                          • Vuelta #{carga.vuelta} • {carga.choferNombre}
+                        </span>
+                        <div className="text-xs text-slate-600">Ruta / Destino: {carga.destino}</div>
+                      </div>
+                      <span className="text-xs font-semibold text-sky-700 shrink-0">
+                        Regresó{' '}
+                        {carga.horaRegreso
+                          ? new Date(carga.horaRegreso).toLocaleTimeString('es-MX', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })
+                          : ''}
+                      </span>
+                    </div>
+
+                    {carga.remisiones.length > 0 && (
+                      <div className="flex flex-wrap gap-1 pt-0.5">
+                        {carga.remisiones.map((r: string) => (
+                          <span
+                            key={r}
+                            className="text-xs bg-white border border-sky-200 text-slate-700 px-2 py-0.5 rounded font-medium"
+                          >
+                            {r}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Historial de cancelaciones hoy */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
           <button
             type="button"
@@ -857,6 +1010,63 @@ export default function PatioPage() {
         </div>
       </div>
 
+      {/* Modal: Unidad actualmente en ruta al intentar seleccionarla */}
+      {cargaEnRutaPorFinalizar && (
+        <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-[2px] flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden">
+            <div className="bg-slate-900 text-white px-5 py-4 flex items-center gap-3">
+              <div className="bg-sky-500/20 border border-sky-400/40 text-sky-300 p-2 rounded-xl">
+                <Truck className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base leading-tight">Esta unidad está en ruta</h3>
+                <p className="text-xs text-slate-300">
+                  {cargaEnRutaPorFinalizar.unidadNombre} • Vuelta #{cargaEnRutaPorFinalizar.vuelta}
+                </p>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="bg-sky-50 border border-sky-200 rounded-xl p-3.5 text-xs text-slate-700 space-y-1">
+                <p className="font-bold text-slate-900 text-sm">
+                  Esta unidad está en ruta, ¿deseas finalizar?
+                </p>
+                <p>
+                  Ruta actual: <span className="font-semibold">{cargaEnRutaPorFinalizar.destino}</span> •
+                  Chofer: <span className="font-semibold">{cargaEnRutaPorFinalizar.choferNombre}</span>
+                </p>
+                {cargaEnRutaPorFinalizar.remisiones.length > 0 && (
+                  <p className="text-slate-500">
+                    Folios: {cargaEnRutaPorFinalizar.remisiones.join(', ')}
+                  </p>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={rechazarFinalizarDesdeSelector}
+                  disabled={Boolean(finalizandoId)}
+                  className="px-4 py-2.5 rounded-xl text-sm font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 transition"
+                >
+                  No
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmarFinalizarDesdeSelector}
+                  disabled={Boolean(finalizandoId)}
+                  className="px-4 py-2.5 rounded-xl text-sm font-bold bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white shadow-sm flex items-center justify-center gap-1.5 transition"
+                >
+                  <Flag className="w-4 h-4" />
+                  {finalizandoId ? 'Finalizando...' : 'Sí, finalizar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirmar cancelación de salida */}
       {cargaACancelar && (
         <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-[2px] flex items-center justify-center p-4">
           <form

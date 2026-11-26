@@ -19,7 +19,13 @@ import {
   FileCheck2,
   AlertTriangle,
   Activity,
+  Flag,
 } from 'lucide-react';
+
+interface UnidadDemorada {
+  nombre: string;
+  minutos: number;
+}
 
 function formatearHoraLocal(iso?: string | null) {
   if (!iso) return '--:--';
@@ -58,33 +64,42 @@ export default function MonitorPage() {
 
   const audioCargandoRef = useRef<HTMLAudioElement | null>(null);
   const audioSalidaRef = useRef<HTMLAudioElement | null>(null);
+  const audioFinalizadoRef = useRef<HTMLAudioElement | null>(null);
   const estadosPreviosRef = useRef<Record<string, Carga['estado']>>({});
   const cargaInicialRef = useRef<boolean>(true);
 
   useEffect(() => {
     audioCargandoRef.current = new Audio('/sonido-cargando.mp3');
     audioSalidaRef.current = new Audio('/sonido-salida.mp3');
+    audioFinalizadoRef.current = new Audio('/sonido-finalizado.mp3');
   }, []);
 
   const desbloquearAudios = () => {
-    [audioCargandoRef.current, audioSalidaRef.current].forEach((audio) => {
-      if (!audio) return;
-      audio.volume = 0;
-      audio
-        .play()
-        .then(() => {
-          audio.pause();
-          audio.currentTime = 0;
-          audio.volume = 1;
-        })
-        .catch(() => {
-          audio.volume = 1;
-        });
-    });
+    [audioCargandoRef.current, audioSalidaRef.current, audioFinalizadoRef.current].forEach(
+      (audio) => {
+        if (!audio) return;
+        audio.volume = 0;
+        audio
+          .play()
+          .then(() => {
+            audio.pause();
+            audio.currentTime = 0;
+            audio.volume = 1;
+          })
+          .catch(() => {
+            audio.volume = 1;
+          });
+      }
+    );
   };
 
-  const reproducirTono = (tipo: 'CARGANDO' | 'SALIDA') => {
-    const audio = tipo === 'CARGANDO' ? audioCargandoRef.current : audioSalidaRef.current;
+  const reproducirTono = (tipo: 'CARGANDO' | 'SALIDA' | 'FINALIZADA') => {
+    const audio =
+      tipo === 'FINALIZADA'
+        ? audioFinalizadoRef.current
+        : tipo === 'SALIDA'
+        ? audioSalidaRef.current
+        : audioCargandoRef.current;
     if (!audio) return;
     audio.volume = 1;
     audio.currentTime = 0;
@@ -145,6 +160,7 @@ export default function MonitorPage() {
       } else {
         let huboNuevaCarga = false;
         let huboNuevaSalida = false;
+        let huboFinalizacion = false;
 
         list.forEach((c) => {
           const previo = mapaActual[c.id];
@@ -152,6 +168,8 @@ export default function MonitorPage() {
             huboNuevaCarga = true;
           } else if (previo && previo !== 'EN_RUTA' && c.estado === 'EN_RUTA') {
             huboNuevaSalida = true;
+          } else if (previo && previo !== 'FINALIZADA' && c.estado === 'FINALIZADA') {
+            huboFinalizacion = true;
           }
         });
 
@@ -163,7 +181,9 @@ export default function MonitorPage() {
           estadosPreviosRef.current = siguienteMapa;
         }
 
-        if (huboNuevaSalida) {
+        if (huboFinalizacion) {
+          reproducirTono('FINALIZADA');
+        } else if (huboNuevaSalida) {
           reproducirTono('SALIDA');
         } else if (huboNuevaCarga) {
           reproducirTono('CARGANDO');
@@ -183,13 +203,14 @@ export default function MonitorPage() {
     setDescargando(false);
   };
 
-  // --- Cálculo de KPIs operativos del día (sin redundancia con los conteos de columnas) ---
+  // --- Cálculo de KPIs operativos del día ---
   const activasHoy = cargas.filter((c) => c.estado !== 'CANCELADA');
   const todasCargando = activasHoy.filter((c) => c.estado === 'CARGANDO');
-  const todasEnRuta = activasHoy.filter((c) => c.estado === 'EN_RUTA');
+  const todasDespachadas = activasHoy.filter(
+    (c) => c.estado === 'EN_RUTA' || c.estado === 'FINALIZADA'
+  );
 
-  // 1. Tiempo promedio de carga (de las que ya salieron hoy)
-  const tiemposCarga = todasEnRuta
+  const tiemposCarga = todasDespachadas
     .map((c) => obtenerMinutosDiferencia(c.horaInicio, c.horaSalida))
     .filter((m): m is number => m !== null);
   const promedioCargaMin =
@@ -197,15 +218,8 @@ export default function MonitorPage() {
       ? Math.round(tiemposCarga.reduce((acc, val) => acc + val, 0) / tiemposCarga.length)
       : null;
 
-  // 2. Remisiones despachadas vs pendientes en patio
-  const remisionesDespachadas = todasEnRuta.reduce((acc, c) => acc + c.remisiones.length, 0);
+  const remisionesDespachadas = todasDespachadas.reduce((acc, c) => acc + c.remisiones.length, 0);
   const remisionesEnPatio = todasCargando.reduce((acc, c) => acc + c.remisiones.length, 0);
-
-  // 3. Unidad con mayor tiempo de espera en patio
-  interface UnidadDemorada {
-    nombre: string;
-    minutos: number;
-  }
 
   const unidadMasDemorada: UnidadDemorada | null = todasCargando.reduce<UnidadDemorada | null>(
     (max, c) => {
@@ -219,8 +233,7 @@ export default function MonitorPage() {
     null
   );
 
-  // 4. Última salida registrada
-  const salidasOrdenadas = [...todasEnRuta]
+  const salidasOrdenadas = [...todasDespachadas]
     .filter((c) => Boolean(c.horaSalida))
     .sort((a, b) => (b.horaSalida || '').localeCompare(a.horaSalida || ''));
   const ultimaSalida = salidasOrdenadas[0] || null;
@@ -240,9 +253,12 @@ export default function MonitorPage() {
 
   const cargando = cargasFiltradas.filter((c) => c.estado === 'CARGANDO');
   const enRuta = cargasFiltradas.filter((c) => c.estado === 'EN_RUTA');
+  const finalizadas = cargasFiltradas
+    .filter((c) => c.estado === 'FINALIZADA')
+    .sort((a, b) => (b.horaRegreso || b.horaInicio).localeCompare(a.horaRegreso || a.horaInicio));
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
+    <div className="min-h-screen bg-slate-950 text-slate-100 pb-10">
       <header className="bg-slate-900 border-b border-slate-800 px-6 py-4 flex flex-wrap items-center justify-between gap-4 sticky top-0 z-10">
         <div className="flex items-center gap-3">
           <Link
@@ -311,9 +327,7 @@ export default function MonitorPage() {
       </header>
 
       <main className="max-w-7xl mx-auto p-6 space-y-6">
-        {/* Tira compacta de 4 KPIs operativos */}
         <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* KPI 1: Tiempo promedio de carga */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-2xl px-4 py-3.5 flex items-center gap-3.5">
             <div className="p-2.5 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400 shrink-0">
               <Timer className="w-5 h-5" />
@@ -333,14 +347,13 @@ export default function MonitorPage() {
             </div>
           </div>
 
-          {/* KPI 2: Remisiones despachadas */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-2xl px-4 py-3.5 flex items-center gap-3.5">
             <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 shrink-0">
               <FileCheck2 className="w-5 h-5" />
             </div>
             <div className="min-w-0">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                Remisiones en Ruta
+                Remisiones Despachadas
               </p>
               <p className="text-lg font-bold text-white truncate">{remisionesDespachadas}</p>
               <p className="text-[11px] text-slate-500 truncate">
@@ -351,7 +364,6 @@ export default function MonitorPage() {
             </div>
           </div>
 
-          {/* KPI 3: Mayor espera en patio */}
           <div
             className={`border rounded-2xl px-4 py-3.5 flex items-center gap-3.5 transition ${
               unidadMasDemorada && unidadMasDemorada.minutos >= 45
@@ -381,7 +393,6 @@ export default function MonitorPage() {
             </div>
           </div>
 
-          {/* KPI 4: Última salida */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-2xl px-4 py-3.5 flex items-center gap-3.5">
             <div className="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 shrink-0">
               <Activity className="w-5 h-5" />
@@ -406,7 +417,6 @@ export default function MonitorPage() {
           </div>
         </section>
 
-        {/* Columnas principales */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <section className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 space-y-4">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
@@ -507,7 +517,7 @@ export default function MonitorPage() {
 
             {enRuta.length === 0 ? (
               <div className="text-center py-12 text-slate-500 border border-dashed border-slate-800 rounded-xl">
-                Aún no hay unidades en ruta hoy
+                Sin unidades activas en ruta en este momento
               </div>
             ) : (
               <div className="space-y-3">
@@ -574,6 +584,100 @@ export default function MonitorPage() {
             )}
           </section>
         </div>
+
+        <section className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+            <div className="flex items-center gap-2.5">
+              <Flag className="w-5 h-5 text-sky-400" />
+              <div>
+                <h2 className="text-base font-bold text-sky-300">Rutas Finalizadas Hoy</h2>
+                <p className="text-xs text-slate-400">
+                  Unidades que ya concluyeron su recorrido y regresaron a patio
+                </p>
+              </div>
+            </div>
+            <span className="bg-sky-500/20 text-sky-300 border border-sky-500/40 text-sm font-bold px-3 py-0.5 rounded-full">
+              {finalizadas.length}
+            </span>
+          </div>
+
+          {finalizadas.length === 0 ? (
+            <div className="text-center py-8 text-sm text-slate-500 border border-dashed border-slate-800 rounded-xl">
+              Aún no se han finalizado rutas el día de hoy
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              {finalizadas.map((c) => {
+                const duracionRuta = formatearDuracion(
+                  obtenerMinutosDiferencia(c.horaSalida, c.horaRegreso)
+                );
+                return (
+                  <div
+                    key={c.id}
+                    className="bg-slate-900 border border-slate-800 border-l-4 border-l-sky-500 rounded-xl p-4 flex flex-col justify-between gap-3"
+                  >
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-bold text-base text-white truncate">
+                            {c.unidadNombre}
+                          </span>
+                          <span className="text-[11px] font-bold bg-sky-950 text-sky-300 border border-sky-800 px-2 py-0.5 rounded shrink-0">
+                            Vuelta #{c.vuelta}
+                          </span>
+                        </div>
+                        <span className="text-xs font-semibold text-sky-400 shrink-0">
+                          Regresó: {formatearHoraLocal(c.horaRegreso)}
+                        </span>
+                      </div>
+
+                      <div className="text-xs text-slate-300 space-y-0.5">
+                        <div>
+                          Chofer: <span className="font-semibold text-white">{c.choferNombre}</span>
+                        </div>
+                        <div>
+                          Ruta: <span className="font-semibold text-sky-300">{c.destino}</span>
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          Cargó {formatearHoraLocal(c.horaInicio)} • Salió{' '}
+                          {formatearHoraLocal(c.horaSalida)}
+                          {duracionRuta ? ` • Recorrido: ${duracionRuta}` : ''}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-[11px] text-slate-400 mb-1">
+                        Folios ({c.remisiones.length}):
+                      </div>
+                      {c.remisiones.length === 0 ? (
+                        <span className="text-[11px] italic text-slate-500">Sin folios</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {c.remisiones.map((r) => {
+                            const coincide = texto && r.toLowerCase().includes(texto);
+                            return (
+                              <span
+                                key={r}
+                                className={`text-[11px] font-bold px-2 py-0.5 rounded border ${
+                                  coincide
+                                    ? 'bg-sky-400 text-slate-950 border-sky-300'
+                                    : 'bg-slate-800 text-slate-200 border-slate-700'
+                                }`}
+                              >
+                                {r}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
       </main>
 
       <DesbloqueoAudioModal
