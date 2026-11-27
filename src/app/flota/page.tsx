@@ -98,25 +98,27 @@ function coincideChoferEstricto(
 
 function cargaCorrespondeAUnidad(
   cg: CargaEstadoDoc,
-  u: UnidadExt
+  u: UnidadExt,
+  todasLasUnidades: UnidadExt[]
 ): boolean {
-  // Prioridad absoluta: ID único de la unidad en Firestore
+  // 1. Coincidencia estricta por ID único de Firestore
   if (cg.unidadId) {
     return cg.unidadId === u.id;
   }
 
-  // Fallback solo para registros antiguos sin unidadId:
-  // exige coincidencia exacta de nombre y, si trae modelo, que coincida con tipo/marcaModelo
+  // 2. Si el registro viejo no tiene unidadId, prohibido empatar si hay más de una unidad con ese nombre
   const nombreCarga = normalizarTexto(cg.unidadNombre || cg.unidad);
   const nombreUnidad = normalizarTexto(u.nombre);
   if (!nombreCarga || !nombreUnidad || nombreCarga !== nombreUnidad) {
     return false;
   }
 
-  const modeloCarga = normalizarTexto(cg.unidadModelo);
-  const detalleUnidad = normalizarTexto(u.tipo || u.marcaModelo);
-  if (modeloCarga && detalleUnidad) {
-    return modeloCarga === detalleUnidad;
+  const hayDuplicadosConEseNombre =
+    todasLasUnidades.filter((item) => normalizarTexto(item.nombre) === nombreUnidad)
+      .length > 1;
+
+  if (hayDuplicadosConEseNombre) {
+    return false;
   }
 
   return true;
@@ -324,7 +326,9 @@ export default function FlotaPage() {
     >();
 
     unidades.forEach((u) => {
-      const cargaActiva = cargasHoyActivas.find((cg) => cargaCorrespondeAUnidad(cg, u));
+      const cargaActiva = cargasHoyActivas.find((cg) =>
+        cargaCorrespondeAUnidad(cg, u, unidades)
+      );
       if (!cargaActiva) {
         mapa.set(u.id, { enRuta: false, cargando: false });
         return;
@@ -356,7 +360,6 @@ export default function FlotaPage() {
 
       if (cargasDelChofer.length === 0) return;
 
-      // Priorizar la carga que esté EN_RUTA si existiera más de una por error operativo
       const cargaPrincipal =
         cargasDelChofer.find((cg) => esEstadoEnRuta(cg.estado)) || cargasDelChofer[0];
 
@@ -373,12 +376,10 @@ export default function FlotaPage() {
           ? ` (${cargasDelChofer.length} rutas activas — revisar)`
           : '';
 
-      const detalle = [
-        unidadTxt,
-        destinoTxt ? `Destino: ${destinoTxt}` : '',
-      ]
-        .filter(Boolean)
-        .join(' • ') + avisoDoble;
+      const detalle =
+        [unidadTxt, destinoTxt ? `Destino: ${destinoTxt}` : '']
+          .filter(Boolean)
+          .join(' • ') + avisoDoble;
 
       mapa.set(ch.id, {
         ocupado: true,

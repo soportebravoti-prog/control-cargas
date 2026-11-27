@@ -13,23 +13,74 @@ const firebaseConfig = {
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 
-export interface Chofer {
-  id: string;
-  nombre: string;
-  activo: boolean;
+export interface FotosUnidad {
+  frente?: string;
+  trasera?: string;
+  costadoIzq?: string;
+  costadoDer?: string;
+  tarjetaCirculacion?: string;
+  polizaSeguro?: string;
 }
 
 export interface Unidad {
   id: string;
   nombre: string;
-  placas?: string;
-  choferDefaultId?: string;
   activo: boolean;
+  choferDefaultId?: string | null;
+  tipo?: string;
+  tipoUnidad?: string;
+  placas?: string;
+  serie?: string;
+  serieVin?: string;
+  marcaModelo?: string;
+  anio?: string | number | null;
+  estatusOperativo?: 'ACTIVA' | 'MANTENIMIENTO';
+  aseguradora?: string;
+  poliza?: string;
+  polizaSeguro?: string;
+  seguroVence?: string | null;
+  vencimientoSeguro?: string | null;
+  tarjetaFolio?: string;
+  tarjetaCirculacion?: string;
+  tarjetaVence?: string | null;
+  vencimientoTarjeta?: string | null;
+  notas?: string;
+  fotos?: FotosUnidad;
+  fotoFrente?: string;
+  fotoTrasero?: string;
+  fotoCostadoIzq?: string;
+  fotoCostadoDer?: string;
+}
+
+export interface Chofer {
+  id: string;
+  nombre: string;
+  activo: boolean;
+  telefono?: string;
+  licenciaNumero?: string;
+  numeroLicencia?: string;
+  licenciaTipo?: string;
+  tipoLicencia?: string;
+  licenciaVence?: string | null;
+  vencimientoLicencia?: string | null;
+  ineFolio?: string;
+  unidadAsignadaId?: string | null;
+  notas?: string;
+  fotoPerfil?: string;
+  fotoLicencia?: string;
+  fotoLicenciaFrente?: string;
+  fotoLicenciaReverso?: string;
+  fotoIne?: string;
+  fotoIneFrente?: string;
+  fotoIneReverso?: string;
 }
 
 export interface Carga {
   id: string;
+  unidadId?: string;
   unidadNombre: string;
+  unidadModelo?: string;
+  choferId?: string | null;
   choferNombre: string;
   destino: string;
   remisiones: string[];
@@ -42,54 +93,13 @@ export interface Carga {
   motivoCancelacion?: string;
   fechaOperacion: string;
 }
+
 export interface Aviso {
   id: string;
   texto: string;
   activo: boolean;
   creadoEn: string;
   fechaOperacion: string;
-}
-
-export interface Unidad {
-  id: string;
-  nombre: string;
-  activo: boolean;
-  choferDefaultId?: string;
-  tipoUnidad?: string;
-  placas?: string;
-  serieVin?: string;
-  marcaModelo?: string;
-  anio?: string;
-  estatusOperativo?: 'ACTIVA' | 'MANTENIMIENTO';
-  aseguradora?: string;
-  polizaSeguro?: string;
-  vencimientoSeguro?: string;
-  tarjetaCirculacion?: string;
-  vencimientoTarjeta?: string;
-  notas?: string;
-  // Fotos de la unidad (Data URL comprimida)
-  fotoFrente?: string;
-  fotoTrasero?: string;
-  fotoCostadoIzq?: string;
-  fotoCostadoDer?: string;
-}
-
-export interface Chofer {
-  id: string;
-  nombre: string;
-  activo: boolean;
-  telefono?: string;
-  numeroLicencia?: string;
-  tipoLicencia?: string;
-  vencimientoLicencia?: string;
-  unidadAsignadaId?: string;
-  notas?: string;
-  // Foto de perfil (rostro) y documentos
-  fotoPerfil?: string;
-  fotoLicenciaFrente?: string;
-  fotoLicenciaReverso?: string;
-  fotoIneFrente?: string;
-  fotoIneReverso?: string;
 }
 
 export type NivelRevision = 'OK' | 'BAJO' | 'ATENCION';
