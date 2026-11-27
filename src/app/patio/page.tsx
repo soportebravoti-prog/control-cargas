@@ -139,7 +139,7 @@ export default function PatioPage() {
 
     const unsubCa = onSnapshot(qCargas, (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Carga));
-      list.sort((a, b) => b.horaInicio.localeCompare(a.horaInicio));
+      list.sort((a, b) => (b.horaInicio || '').localeCompare(a.horaInicio || ''));
 
       const mapaActual =
         estadosPreviosRef &&

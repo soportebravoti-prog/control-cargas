@@ -3,6 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
+import { BrowserQRCodeReader } from '@zxing/browser';
 import { db, Chofer, Unidad, NivelRevision } from '@/lib/firebase';
 import { BotonTema, useTemaApp } from '@/components/BotonTema';
 import {
@@ -25,7 +26,6 @@ import {
   UserCheck,
   MapPin,
   FileText,
-  Save,
   QrCode,
   X,
   RefreshCw,
@@ -34,6 +34,7 @@ import {
   Trash2,
   ShieldCheck,
   Wrench,
+  Route,
 } from 'lucide-react';
 
 interface CargaDoc {
@@ -49,6 +50,7 @@ interface CargaDoc {
   estado?: string;
   fechaIso?: string;
   fechaOperacion?: string;
+  horaInicio?: string;
   horaLlegada?: string;
   horaSalida?: string;
   horaRegreso?: string;
@@ -176,6 +178,9 @@ function ContenidoChofer() {
   const [choferes, setChoferes] = useState<Chofer[]>([]);
   const [unidades, setUnidades] = useState<Unidad[]>([]);
   const [cargas, setCargas] = useState<CargaDoc[]>([]);
+  const [revisionesHoy, setRevisionesHoy] = useState<
+    Array<{ unidadId?: string; unidadNombre?: string; kilometraje?: number | null }>
+  >([]);
 
   const [choferId, setChoferId] = useState<string>('');
   const [unidadId, setUnidadId] = useState<string>('');
@@ -186,15 +191,27 @@ function ContenidoChofer() {
 
   const [pestana, setPestana] = useState<'ruta' | 'gasolina' | 'cierre'>('ruta');
   const [mensajeEstado, setMensajeEstado] = useState<string | null>(null);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [ocupado, setOcupado] = useState(false);
 
+  // Escáner QR con @zxing/browser
   const [escanerAbierto, setEscanerAbierto] = useState(false);
   const [errorEscaner, setErrorEscaner] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const controlsRef = useRef<{ stop: () => void } | null>(null);
+  const fotoQrInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Visor de imagen ampliada
+  const [imagenAmpliada, setImagenAmpliada] = useState<{
+    titulo: string;
+    src: string;
+  } | null>(null);
+
+  // Ruta sin remisiones
+  const [destinoSinRemision, setDestinoSinRemision] = useState<string>('');
 
   // 1. Revisión de Salida
-  const [mostrarCheckSalida, setMostrarCheckSalida] = useState(false);
-  const [salidaEnviadaHoy, setSalidaEnviadaHoy] = useState(false);
+  const [forzarRevisionSalida, setForzarRevisionSalida] = useState<boolean>(false);
   const [kmInicialHoy, setKmInicialHoy] = useState<number | null>(null);
   const [nivelCombustibleSalida, setNivelCombustibleSalida] = useState<
     'VACIO' | '1/4' | '1/2' | '3/4' | 'LLENO'
@@ -227,6 +244,31 @@ function ContenidoChofer() {
     unidad: string;
   } | null>(null);
 
+  const mostrarAviso = useCallback((texto: string) => {
+    setErrorBanner(null);
+    setMensajeEstado(texto);
+    window.setTimeout(() => {
+      setMensajeEstado((prev) => (prev === texto ? null : prev));
+    }, 4500);
+  }, []);
+
+  const mostrarError = useCallback((texto: string) => {
+    setMensajeEstado(null);
+    setErrorBanner(texto);
+    window.setTimeout(() => {
+      setErrorBanner((prev) => (prev === texto ? null : prev));
+    }, 6000);
+  }, []);
+
+  useEffect(() => {
+    if (!imagenAmpliada) return;
+    const alPresionarTecla = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setImagenAmpliada(null);
+    };
+    window.addEventListener('keydown', alPresionarTecla);
+    return () => window.removeEventListener('keydown', alPresionarTecla);
+  }, [imagenAmpliada]);
+
   useEffect(() => {
     const choferGuardado = window.localStorage.getItem(CLAVE_CHOFER_STORAGE);
     if (choferGuardado) setChoferId(choferGuardado);
@@ -240,9 +282,14 @@ function ContenidoChofer() {
       if (unidadGuardada) setUnidadId(unidadGuardada);
     }
 
+    const hoyIso = obtenerFechaHoyIso();
     const qChoferes = query(collection(db, 'choferes'), where('activo', '==', true));
     const qUnidades = query(collection(db, 'unidades'), where('activo', '==', true));
     const qCargas = collection(db, 'cargas');
+    const qReportesHoy = query(
+      collection(db, 'reportes_flota'),
+      where('fechaIso', '==', hoyIso)
+    );
 
     const unsubC = onSnapshot(qChoferes, (snap) => {
       const lista = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Chofer));
@@ -261,10 +308,23 @@ function ContenidoChofer() {
       setCargas(lista);
     });
 
+    const unsubRep = onSnapshot(qReportesHoy, (snap) => {
+      const revs = snap.docs
+        .map((d) => d.data())
+        .filter((r) => (r.tipo || r.tipoReporte) === 'REVISION_SALIDA')
+        .map((r) => ({
+          unidadId: r.unidadId as string | undefined,
+          unidadNombre: r.unidadNombre as string | undefined,
+          kilometraje: typeof r.kilometraje === 'number' ? r.kilometraje : null,
+        }));
+      setRevisionesHoy(revs);
+    });
+
     return () => {
       unsubC();
       unsubU();
       unsubCr();
+      unsubRep();
     };
   }, [unidadQueryParam]);
 
@@ -384,7 +444,9 @@ function ContenidoChofer() {
   const handleSeleccionarChofer = (nuevoChoferId: string) => {
     setChoferId(nuevoChoferId);
     setMensajeEstado(null);
+    setErrorBanner(null);
     setJornadaCerradaInfo(null);
+    setForzarRevisionSalida(false);
 
     if (!nuevoChoferId) {
       window.localStorage.removeItem(CLAVE_CHOFER_STORAGE);
@@ -408,6 +470,7 @@ function ContenidoChofer() {
       setOrigenAsignacion(nuevaUnidadId ? origen : null);
       setCambiandoUnidad(false);
       setJornadaCerradaInfo(null);
+      setForzarRevisionSalida(false);
 
       if (!nuevaUnidadId) {
         window.localStorage.removeItem(CLAVE_UNIDAD_STORAGE);
@@ -440,72 +503,105 @@ function ContenidoChofer() {
     [unidades, unidadId]
   );
 
+  const revisionUnidadActual = useMemo(() => {
+    if (!unidadActual) return null;
+    return (
+      revisionesHoy.find(
+        (r) =>
+          r.unidadId === unidadActual.id ||
+          normalizarTexto(r.unidadNombre) === normalizarTexto(unidadActual.nombre)
+      ) || null
+    );
+  }, [revisionesHoy, unidadActual]);
+
+  const salidaEnviadaHoy = revisionUnidadActual !== null && !forzarRevisionSalida;
+
+  useEffect(() => {
+    if (revisionUnidadActual?.kilometraje && kmInicialHoy === null) {
+      setKmInicialHoy(revisionUnidadActual.kilometraje);
+    }
+  }, [revisionUnidadActual, kmInicialHoy]);
+
+  // Lector QR con @zxing/browser para iPhone, Android y PC
   useEffect(() => {
     if (!escanerAbierto) return;
-    let streamActivo: MediaStream | null = null;
-    let intervalo: number | null = null;
+    let cancelado = false;
+    setErrorEscaner(null);
 
     const iniciarCamara = async () => {
       try {
-        setErrorEscaner(null);
-        const Detector = (
-          window as unknown as {
-            BarcodeDetector?: new (opts: { formats: string[] }) => {
-              detect: (src: HTMLVideoElement) => Promise<Array<{ rawValue?: string }>>;
-            };
-          }
-        ).BarcodeDetector;
-
-        if (!Detector) {
-          setErrorEscaner(
-            'Tu navegador no soporta escaneo directo dentro de la web. Puedes escanear el QR directo con la cámara normal de tu iPhone o Android y te abrirá esta pantalla.'
-          );
-          return;
-        }
-
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
-        });
-        streamActivo = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-
-        const detector = new Detector({ formats: ['qr_code'] });
-        intervalo = window.setInterval(async () => {
-          if (!videoRef.current) return;
-          try {
-            const codigos = await detector.detect(videoRef.current);
-            if (codigos.length > 0 && codigos[0].rawValue) {
-              const idDetectado = extraerIdUnidadDeQr(codigos[0].rawValue);
+        if (!videoRef.current) return;
+        const reader = new BrowserQRCodeReader();
+        const controls = await reader.decodeFromConstraints(
+          {
+            video: { facingMode: { ideal: 'environment' } },
+          },
+          videoRef.current,
+          (result, err) => {
+            if (cancelado) return;
+            if (result) {
+              const idDetectado = extraerIdUnidadDeQr(result.getText());
               const existe = unidades.find((u) => u.id === idDetectado);
               if (existe) {
+                controls.stop();
                 handleSeleccionarUnidad(existe.id, 'QR');
                 setEscanerAbierto(false);
                 mostrarAviso(`QR escaneado: ${existe.nombre}`);
               }
             }
-          } catch {
-            // Ignora cuadros sin lectura
+            if (err && err.name !== 'NotFoundException') {
+              // Cuadros sin QR son normales
+            }
           }
-        }, 450);
-      } catch {
-        setErrorEscaner(
-          'No se pudo acceder a la cámara. Puedes escanear el QR directo desde la app Cámara de tu teléfono.'
         );
+
+        if (cancelado) {
+          controls.stop();
+        } else {
+          controlsRef.current = controls;
+        }
+      } catch {
+        if (!cancelado) {
+          setErrorEscaner(
+            'No se pudo abrir la cámara en vivo. Revisa permisos del navegador o usa "Leer QR desde foto / cámara".'
+          );
+        }
       }
     };
 
     iniciarCamara();
 
     return () => {
-      if (intervalo) window.clearInterval(intervalo);
-      if (streamActivo) {
-        streamActivo.getTracks().forEach((t) => t.stop());
-      }
+      cancelado = true;
+      controlsRef.current?.stop();
+      controlsRef.current = null;
     };
-  }, [escanerAbierto, unidades, handleSeleccionarUnidad]);
+  }, [escanerAbierto, unidades, handleSeleccionarUnidad, mostrarAviso]);
+
+  const handleLeerQrDesdeFoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const urlTemporal = URL.createObjectURL(file);
+    try {
+      const reader = new BrowserQRCodeReader();
+      const res = await reader.decodeFromImageUrl(urlTemporal);
+      const idDetectado = extraerIdUnidadDeQr(res.getText());
+      const existe = unidades.find((u) => u.id === idDetectado);
+      if (existe) {
+        controlsRef.current?.stop();
+        handleSeleccionarUnidad(existe.id, 'QR');
+        setEscanerAbierto(false);
+        mostrarAviso(`QR detectado: ${existe.nombre}`);
+      } else {
+        setErrorEscaner('El QR leído no corresponde a una unidad activa.');
+      }
+    } catch {
+      setErrorEscaner('No se pudo leer ningún QR en la imagen.');
+    } finally {
+      URL.revokeObjectURL(urlTemporal);
+      e.target.value = '';
+    }
+  };
 
   const cargasActivasVisibles = useMemo(() => {
     const abiertas = cargas.filter((cg) => esCargaAbierta(cg.estado));
@@ -526,28 +622,137 @@ function ContenidoChofer() {
     });
   }, [cargas, choferActual, unidadActual]);
 
-  const mostrarAviso = (texto: string) => {
-    setMensajeEstado(texto);
-    window.setTimeout(() => {
-      setMensajeEstado((prev) => (prev === texto ? null : prev));
-    }, 4500);
+  const registrarRevisionObligatoriaSiFalta = async (): Promise<boolean> => {
+    if (!choferActual) {
+      mostrarError('Selecciona primero tu nombre de chofer arriba.');
+      return false;
+    }
+    if (!unidadActual) {
+      mostrarError('Escanea o selecciona la unidad arriba.');
+      return false;
+    }
+    if (salidaEnviadaHoy) return true;
+
+    const kmNum = kilometrajeSalida ? Number(kilometrajeSalida) : null;
+    if (!kmNum || kmNum <= 0) {
+      mostrarError('Ingresa el kilometraje inicial de la unidad antes de salir a ruta.');
+      return false;
+    }
+
+    await addDoc(collection(db, 'reportes_flota'), {
+      tipo: 'REVISION_SALIDA',
+      tipoReporte: 'REVISION_SALIDA',
+      unidadId: unidadActual.id,
+      unidadNombre: unidadActual.nombre,
+      choferId: choferActual.id,
+      choferNombre: choferActual.nombre,
+      nivelCombustible: nivelCombustibleSalida,
+      aceite,
+      anticongelante,
+      llantas,
+      limpieza: limpiezaSalida,
+      kilometraje: kmNum,
+      observaciones: observacionesSalida.trim(),
+      fechaIso: obtenerFechaHoyIso(),
+      fechaOperacion: obtenerFechaHoyIso(),
+      horaTexto: obtenerHoraActualTexto(),
+      creadoEn: new Date().toISOString(),
+    });
+
+    setKmInicialHoy(kmNum);
+    setForzarRevisionSalida(false);
+    setObservacionesSalida('');
+    return true;
   };
 
-  const iniciarRuta = async (carga: CargaDoc) => {
+  const revisarYIniciarRutaSinRemision = async () => {
     if (ocupado) return;
     try {
       setOcupado(true);
+
+      const okRevision = await registrarRevisionObligatoriaSiFalta();
+      if (!okRevision || !unidadActual) return;
+
+      const fechaHoy = obtenerFechaHoyIso();
+      const ahoraIso = new Date().toISOString();
+
+      // Si Patio ya creó una carga abierta para esta unidad, la reutiliza para no duplicar
+      const cargaAbiertaUnidad = cargas.find(
+        (cg) =>
+          esCargaAbierta(cg.estado) &&
+          (cg.unidadId === unidadActual.id ||
+            normalizarTexto(obtenerUnidadDeCarga(cg)) === normalizarTexto(unidadActual.nombre))
+      );
+
+      if (cargaAbiertaUnidad) {
+        if (esCargaEnRuta(cargaAbiertaUnidad.estado)) {
+          mostrarError(`${unidadActual.nombre} ya tiene una ruta activa en curso.`);
+          return;
+        }
+        await updateDoc(doc(db, 'cargas', cargaAbiertaUnidad.id), {
+          estado: 'EN_RUTA',
+          horaSalida: ahoraIso,
+        });
+        mostrarAviso(`Revisión lista y ruta iniciada para ${unidadActual.nombre}.`);
+        return;
+      }
+
+      const vueltasHoyUnidad = cargas.filter(
+        (cg) =>
+          (cg.fechaOperacion || cg.fechaIso) === fechaHoy &&
+          normalizarTexto(obtenerUnidadDeCarga(cg)) === normalizarTexto(unidadActual.nombre) &&
+          normalizarTexto(cg.estado) !== 'cancelada'
+      ).length;
+
+      await addDoc(collection(db, 'cargas'), {
+        unidadId: unidadActual.id,
+        unidadNombre: unidadActual.nombre,
+        unidad: unidadActual.nombre,
+        choferId: choferActual?.id || null,
+        choferNombre: choferActual?.nombre || 'Operador en ruta',
+        chofer: choferActual?.nombre || 'Operador en ruta',
+        destino: destinoSinRemision.trim() || 'Ruta sin remisiones',
+        remisiones: [],
+        vuelta: vueltasHoyUnidad + 1,
+        estado: 'EN_RUTA',
+        fechaOperacion: fechaHoy,
+        fechaIso: fechaHoy,
+        horaInicio: ahoraIso,
+        horaSalida: ahoraIso,
+        horaRegreso: null,
+      });
+
+      setDestinoSinRemision('');
+      mostrarAviso(
+        `Revisión guardada y ruta iniciada para ${unidadActual.nombre} (sin remisiones).`
+      );
+    } catch (err) {
+      mostrarError(
+        `No se pudo iniciar la ruta: ${err instanceof Error ? err.message : 'Error desconocido'}`
+      );
+    } finally {
+      setOcupado(false);
+    }
+  };
+
+  // Inicia una carga ya registrada por Patio (conservando sus remisiones y destino)
+  const revisarYIniciarRuta = async (carga: CargaDoc) => {
+    if (ocupado) return;
+    try {
+      setOcupado(true);
+
+      const okRevision = await registrarRevisionObligatoriaSiFalta();
+      if (!okRevision) return;
+
       await updateDoc(doc(db, 'cargas', carga.id), {
         estado: 'EN_RUTA',
         horaSalida: new Date().toISOString(),
-        iniciadoPor: 'CHOFER',
-        ...(choferActual && !obtenerChoferDeCarga(carga)
-          ? { choferNombre: choferActual.nombre }
-          : {}),
       });
-      mostrarAviso(`Ruta iniciada para ${obtenerUnidadDeCarga(carga) || 'la unidad'}.`);
+      mostrarAviso(
+        `Revisión confirmada y ruta iniciada para ${obtenerUnidadDeCarga(carga) || 'la unidad'}.`
+      );
     } catch (err) {
-      alert(
+      mostrarError(
         `No se pudo iniciar la ruta: ${err instanceof Error ? err.message : 'Error desconocido'}`
       );
     } finally {
@@ -562,59 +767,11 @@ function ContenidoChofer() {
       await updateDoc(doc(db, 'cargas', carga.id), {
         estado: 'FINALIZADA',
         horaRegreso: new Date().toISOString(),
-        finalizadoPor: 'CHOFER',
       });
       mostrarAviso(`Entrega finalizada para ${obtenerUnidadDeCarga(carga) || 'la unidad'}.`);
     } catch (err) {
-      alert(
+      mostrarError(
         `No se pudo finalizar la ruta: ${err instanceof Error ? err.message : 'Error desconocido'}`
-      );
-    } finally {
-      setOcupado(false);
-    }
-  };
-
-  const guardarRevisionSalida = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (ocupado) return;
-    if (!choferActual) {
-      alert('Selecciona primero tu nombre de chofer arriba.');
-      return;
-    }
-    if (!unidadActual) {
-      alert('Escanea o selecciona la unidad arriba.');
-      return;
-    }
-
-    const kmNum = kilometrajeSalida ? Number(kilometrajeSalida) : null;
-
-    try {
-      setOcupado(true);
-      await addDoc(collection(db, 'reportes_flota'), {
-        tipo: 'REVISION_SALIDA',
-        unidadId: unidadActual.id,
-        unidadNombre: unidadActual.nombre,
-        choferId: choferActual.id,
-        choferNombre: choferActual.nombre,
-        nivelCombustible: nivelCombustibleSalida,
-        aceite,
-        anticongelante,
-        llantas,
-        limpieza: limpiezaSalida,
-        kilometraje: kmNum,
-        observaciones: observacionesSalida.trim(),
-        fechaIso: obtenerFechaHoyIso(),
-        horaTexto: obtenerHoraActualTexto(),
-        creadoEn: new Date().toISOString(),
-      });
-      if (kmNum) setKmInicialHoy(kmNum);
-      setSalidaEnviadaHoy(true);
-      setMostrarCheckSalida(false);
-      setObservacionesSalida('');
-      mostrarAviso(`Revisión de salida de ${unidadActual.nombre} enviada.`);
-    } catch (err) {
-      alert(
-        `No se pudo enviar la revisión: ${err instanceof Error ? err.message : 'Error desconocido'}`
       );
     } finally {
       setOcupado(false);
@@ -625,16 +782,16 @@ function ContenidoChofer() {
     e.preventDefault();
     if (ocupado) return;
     if (!choferActual) {
-      alert('Selecciona primero tu nombre de chofer arriba.');
+      mostrarError('Selecciona primero tu nombre de chofer arriba.');
       return;
     }
     if (!unidadActual) {
-      alert('Escanea o selecciona la unidad arriba.');
+      mostrarError('Escanea o selecciona la unidad arriba.');
       return;
     }
     const litrosNum = Number(litros);
     if (!litrosNum || litrosNum <= 0) {
-      alert('Ingresa los litros cargados.');
+      mostrarError('Ingresa los litros cargados.');
       return;
     }
 
@@ -642,6 +799,7 @@ function ContenidoChofer() {
       setOcupado(true);
       await addDoc(collection(db, 'reportes_flota'), {
         tipo: 'CARGA_GASOLINA',
+        tipoReporte: 'GASOLINA',
         unidadId: unidadActual.id,
         unidadNombre: unidadActual.nombre,
         choferId: choferActual.id,
@@ -651,6 +809,7 @@ function ContenidoChofer() {
         odometro: odometro ? Number(odometro) : null,
         notas: notasGasolina.trim(),
         fechaIso: obtenerFechaHoyIso(),
+        fechaOperacion: obtenerFechaHoyIso(),
         horaTexto: obtenerHoraActualTexto(),
         creadoEn: new Date().toISOString(),
       });
@@ -660,7 +819,7 @@ function ContenidoChofer() {
       setNotasGasolina('');
       mostrarAviso(`Carga de ${litrosNum} L registrada en ${unidadActual.nombre}.`);
     } catch (err) {
-      alert(
+      mostrarError(
         `No se pudo guardar la gasolina: ${err instanceof Error ? err.message : 'Error desconocido'}`
       );
     } finally {
@@ -676,7 +835,7 @@ function ContenidoChofer() {
       const comprimida = await comprimirFotoDano(file);
       setFotoDano(comprimida);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'No se pudo procesar la foto.');
+      mostrarError(err instanceof Error ? err.message : 'No se pudo procesar la foto.');
     } finally {
       setProcesandoFotoDano(false);
       e.target.value = '';
@@ -687,15 +846,15 @@ function ContenidoChofer() {
     e.preventDefault();
     if (ocupado) return;
     if (!choferActual) {
-      alert('Selecciona primero tu nombre de chofer arriba.');
+      mostrarError('Selecciona primero tu nombre de chofer arriba.');
       return;
     }
     if (!unidadActual) {
-      alert('Escanea o selecciona la unidad que estás entregando.');
+      mostrarError('Escanea o selecciona la unidad que estás entregando.');
       return;
     }
     if (tieneGolpeODano && !descripcionDano.trim()) {
-      alert('Describe brevemente el golpe o daño que presenta la unidad.');
+      mostrarError('Describe brevemente el golpe o daño que presenta la unidad.');
       return;
     }
 
@@ -711,6 +870,7 @@ function ContenidoChofer() {
 
       await addDoc(collection(db, 'reportes_flota'), {
         tipo: 'CIERRE_DIA',
+        tipoReporte: 'CIERRE_DIA',
         unidadId: unidadActual.id,
         unidadNombre: unidadActual.nombre,
         choferId: choferActual.id,
@@ -724,6 +884,7 @@ function ContenidoChofer() {
         descripcionDano: tieneGolpeODano ? descripcionDano.trim() : '',
         fotoDano: tieneGolpeODano ? fotoDano : '',
         fechaIso: obtenerFechaHoyIso(),
+        fechaOperacion: obtenerFechaHoyIso(),
         horaTexto: horaCierre,
         creadoEn: new Date().toISOString(),
       });
@@ -732,7 +893,6 @@ function ContenidoChofer() {
         await updateDoc(doc(db, 'cargas', cg.id), {
           estado: 'FINALIZADA',
           horaRegreso: new Date().toISOString(),
-          finalizadoPor: 'CIERRE_DIA_CHOFER',
         });
       }
 
@@ -741,9 +901,10 @@ function ContenidoChofer() {
       setTieneGolpeODano(false);
       setDescripcionDano('');
       setFotoDano('');
+      setForzarRevisionSalida(false);
       mostrarAviso(`Día cerrado y ${unidadActual.nombre} entregada.`);
     } catch (err) {
-      alert(
+      mostrarError(
         `No se pudo cerrar el día: ${err instanceof Error ? err.message : 'Error desconocido'}`
       );
     } finally {
@@ -798,6 +959,125 @@ function ContenidoChofer() {
     </div>
   );
 
+  const renderChecklistSalidaObligatorio = () => {
+    if (salidaEnviadaHoy) {
+      return (
+        <div
+          className={`rounded-xl border px-3 py-2.5 flex items-center justify-between gap-2 flex-wrap ${
+            esOscuro
+              ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
+              : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+          }`}
+        >
+          <span className="text-xs font-bold inline-flex items-center gap-1.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+            Revisión de salida de hoy completada
+            {kmInicialHoy !== null ? ` • Km inicial: ${kmInicialHoy}` : ''}
+          </span>
+          <button
+            type="button"
+            onClick={() => setForzarRevisionSalida(true)}
+            className={`text-[11px] font-bold px-2 py-1 rounded-lg border transition ${
+              esOscuro
+                ? 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-200'
+                : 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700'
+            }`}
+          >
+            Rehacer revisión
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        className={`rounded-xl border p-3.5 space-y-4 ${
+          esOscuro
+            ? 'bg-slate-950/70 border-amber-500/40'
+            : 'bg-amber-50/60 border-amber-300'
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Wrench className="w-4 h-4 text-amber-500 shrink-0" />
+            <div>
+              <p className="text-xs font-extrabold uppercase tracking-wide text-amber-500">
+                Paso obligatorio antes de salir
+              </p>
+              <p className={`text-[11px] ${esOscuro ? 'text-slate-400' : 'text-slate-600'}`}>
+                Revisa combustible, niveles, llantas y kilometraje para habilitar la salida
+              </p>
+            </div>
+          </div>
+
+          {forzarRevisionSalida && revisionUnidadActual && (
+            <button
+              type="button"
+              onClick={() => setForzarRevisionSalida(false)}
+              className="text-[11px] font-bold text-slate-400 hover:text-white"
+            >
+              Cancelar
+            </button>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="block text-xs font-bold">Nivel de combustible al salir *</label>
+          <div className="grid grid-cols-5 gap-1.5">
+            {(['VACIO', '1/4', '1/2', '3/4', 'LLENO'] as const).map((niv) => (
+              <button
+                key={niv}
+                type="button"
+                onClick={() => setNivelCombustibleSalida(niv)}
+                className={`py-2 rounded-xl text-xs font-bold border transition ${
+                  nivelCombustibleSalida === niv
+                    ? 'bg-amber-600 text-white border-amber-500'
+                    : esOscuro
+                    ? 'bg-slate-900 border-slate-800 text-slate-300'
+                    : 'bg-white border-slate-300 text-slate-700'
+                }`}
+              >
+                {niv === 'VACIO' ? 'Vacío' : niv}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+          {renderSelectorNivel('Aceite de motor *', aceite, setAceite)}
+          {renderSelectorNivel('Anticongelante *', anticongelante, setAnticongelante)}
+          {renderSelectorNivel('Llantas *', llantas, setLlantas)}
+          {renderSelectorNivel('Limpieza al salir *', limpiezaSalida, setLimpiezaSalida)}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-bold mb-1">Kilometraje inicial *</label>
+            <input
+              type="number"
+              inputMode="numeric"
+              required
+              placeholder="Ej. 48250"
+              value={kilometrajeSalida}
+              onChange={(e) => setKilometrajeSalida(e.target.value)}
+              className={claseCampo}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold mb-1">Observaciones (opcional)</label>
+            <input
+              type="text"
+              placeholder="Algún detalle antes de salir..."
+              value={observacionesSalida}
+              onChange={(e) => setObservacionesSalida(e.target.value)}
+              className={claseCampo}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const kmCalculadosPreview =
     kilometrajeCierre && kmInicialHoy !== null && Number(kilometrajeCierre) >= kmInicialHoy
       ? Number(kilometrajeCierre) - kmInicialHoy
@@ -811,9 +1091,7 @@ function ContenidoChofer() {
     >
       <header
         className={`border-b px-4 py-3.5 sticky top-0 z-10 flex items-center justify-between gap-3 ${
-          esOscuro
-            ? 'bg-slate-900 border-slate-800'
-            : 'bg-white border-slate-200 shadow-sm'
+          esOscuro ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
         }`}
       >
         <div className="flex items-center gap-2.5 min-w-0">
@@ -833,7 +1111,7 @@ function ContenidoChofer() {
               Portal del Chofer — Ruta y Jornada
             </h1>
             <p className={`text-xs truncate ${esOscuro ? 'text-slate-400' : 'text-slate-500'}`}>
-              Salida, ruta en vivo, gasolina y cierre de día
+              Revisión de salida, ruta en vivo, gasolina y cierre de día
             </p>
           </div>
         </div>
@@ -864,7 +1142,13 @@ function ContenidoChofer() {
                 <img
                   src={choferActual.fotoPerfil}
                   alt={choferActual.nombre}
-                  className="w-11 h-11 rounded-full object-cover border-2 border-amber-500 shrink-0"
+                  onClick={() =>
+                    setImagenAmpliada({
+                      titulo: `Foto perfil — ${choferActual.nombre}`,
+                      src: choferActual.fotoPerfil!,
+                    })
+                  }
+                  className="w-11 h-11 rounded-full object-cover border-2 border-amber-500 shrink-0 cursor-zoom-in hover:opacity-90 transition"
                 />
               ) : (
                 <div
@@ -988,6 +1272,13 @@ function ContenidoChofer() {
           </div>
         )}
 
+        {errorBanner && (
+          <div className="bg-rose-950/95 border border-rose-500/50 text-rose-200 px-4 py-3 rounded-2xl text-xs sm:text-sm font-bold flex items-center gap-2 shadow">
+            <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0" />
+            <span>{errorBanner}</span>
+          </div>
+        )}
+
         <div className="grid grid-cols-3 gap-2">
           <button
             type="button"
@@ -1031,123 +1322,48 @@ function ContenidoChofer() {
 
         {pestana === 'ruta' && (
           <section className="space-y-4">
-            <div className={`border rounded-2xl p-4 space-y-3 ${claseTarjeta}`}>
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Wrench className="w-4 h-4 text-amber-500 shrink-0" />
-                  <div>
-                    <p className="text-xs font-bold">Revisión antes de salir a ruta</p>
-                    <p className={`text-[11px] ${esOscuro ? 'text-slate-400' : 'text-slate-500'}`}>
-                      Aceite, anticongelante, llantas, gasolina y km inicial
-                    </p>
-                  </div>
-                </div>
-
-                {salidaEnviadaHoy ? (
-                  <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 inline-flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Lista
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setMostrarCheckSalida((v) => !v)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
-                      mostrarCheckSalida
-                        ? 'bg-slate-700 text-white border-slate-600'
-                        : 'bg-amber-600 hover:bg-amber-500 text-white border-amber-500'
-                    }`}
-                  >
-                    {mostrarCheckSalida ? 'Ocultar' : 'Revisar Salida'}
-                  </button>
-                )}
-              </div>
-
-              {mostrarCheckSalida && (
-                <form
-                  onSubmit={guardarRevisionSalida}
-                  className={`pt-3 border-t space-y-4 ${
-                    esOscuro ? 'border-slate-800' : 'border-slate-200'
-                  }`}
-                >
-                  <div className="space-y-1.5">
-                    <label className="block text-xs font-bold">Nivel de combustible al salir</label>
-                    <div className="grid grid-cols-5 gap-1.5">
-                      {(['VACIO', '1/4', '1/2', '3/4', 'LLENO'] as const).map((niv) => (
-                        <button
-                          key={niv}
-                          type="button"
-                          onClick={() => setNivelCombustibleSalida(niv)}
-                          className={`py-2 rounded-xl text-xs font-bold border transition ${
-                            nivelCombustibleSalida === niv
-                              ? 'bg-amber-600 text-white border-amber-500'
-                              : esOscuro
-                              ? 'bg-slate-950 border-slate-800 text-slate-300'
-                              : 'bg-slate-50 border-slate-300 text-slate-700'
-                          }`}
-                        >
-                          {niv === 'VACIO' ? 'Vacío' : niv}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                    {renderSelectorNivel('Aceite de motor', aceite, setAceite)}
-                    {renderSelectorNivel('Anticongelante', anticongelante, setAnticongelante)}
-                    {renderSelectorNivel('Llantas', llantas, setLlantas)}
-                    {renderSelectorNivel('Limpieza al salir', limpiezaSalida, setLimpiezaSalida)}
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-bold mb-1">Kilometraje inicial</label>
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        placeholder="Ej. 48250"
-                        value={kilometrajeSalida}
-                        onChange={(e) => setKilometrajeSalida(e.target.value)}
-                        className={claseCampo}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold mb-1">Observaciones (opcional)</label>
-                      <input
-                        type="text"
-                        placeholder="Algún detalle antes de salir..."
-                        value={observacionesSalida}
-                        onChange={(e) => setObservacionesSalida(e.target.value)}
-                        className={claseCampo}
-                      />
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={ocupado}
-                    className="w-full py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 shadow transition"
-                  >
-                    <Save className="w-4 h-4" />
-                    <span>Guardar Revisión de Salida</span>
-                  </button>
-                </form>
-              )}
-            </div>
-
             {!choferActual && !unidadActual ? (
               <div className={`border rounded-2xl p-8 text-center text-sm ${claseTarjeta}`}>
-                Escanea el QR de tu unidad o selecciona tu nombre arriba para ver tu ruta.
+                Escanea el QR de tu unidad o selecciona tu nombre arriba para revisar salida e iniciar ruta.
               </div>
             ) : cargasActivasVisibles.length === 0 ? (
-              <div className={`border rounded-2xl p-8 text-center space-y-1 ${claseTarjeta}`}>
-                <p className="font-bold text-sm">
-                  No hay carga abierta registrada en Patio para{' '}
-                  {unidadActual ? unidadActual.nombre : choferActual?.nombre}
-                </p>
-                <p className={`text-xs ${esOscuro ? 'text-slate-400' : 'text-slate-500'}`}>
-                  En cuanto Patio registre la unidad en carga o ruta, aparecerá aquí con los
-                  botones de Iniciar / Finalizar Ruta.
-                </p>
+              <div className={`border rounded-2xl p-4 sm:p-5 space-y-4 ${claseTarjeta}`}>
+                <div className="flex items-center gap-2">
+                  <Route className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <p className="font-bold text-sm">
+                    Salida sin remisiones —{' '}
+                    {unidadActual ? unidadActual.nombre : choferActual?.nombre}
+                  </p>
+                </div>
+
+                {renderChecklistSalidaObligatorio()}
+
+                <div className="space-y-2.5">
+                  <label className="block text-xs font-bold">
+                    Destino o motivo de salida (opcional)
+                  </label>
+                  <input
+                    type="text"
+                    value={destinoSinRemision}
+                    onChange={(e) => setDestinoSinRemision(e.target.value)}
+                    placeholder="Ej. Ruta local, recolección, apoyo..."
+                    className={claseCampo}
+                  />
+
+                  <button
+                    type="button"
+                    disabled={ocupado || !unidadActual || !choferActual}
+                    onClick={revisarYIniciarRutaSinRemision}
+                    className="w-full py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow transition"
+                  >
+                    <Play className="w-5 h-5 fill-current" />
+                    <span>
+                      {salidaEnviadaHoy
+                        ? 'Iniciar Ruta sin Remisión'
+                        : 'Confirmar Revisión e Iniciar Ruta'}
+                    </span>
+                  </button>
+                </div>
               </div>
             ) : (
               cargasActivasVisibles.map((cg) => {
@@ -1213,16 +1429,22 @@ function ContenidoChofer() {
                       </p>
                     </div>
 
+                    {!enRuta && renderChecklistSalidaObligatorio()}
+
                     <div className="pt-1">
                       {!enRuta ? (
                         <button
                           type="button"
                           disabled={ocupado}
-                          onClick={() => iniciarRuta(cg)}
+                          onClick={() => revisarYIniciarRuta(cg)}
                           className="w-full py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow transition"
                         >
                           <Play className="w-5 h-5 fill-current" />
-                          <span>Iniciar Ruta</span>
+                          <span>
+                            {salidaEnviadaHoy
+                              ? 'Iniciar Ruta'
+                              : 'Confirmar Revisión e Iniciar Ruta'}
+                          </span>
                         </button>
                       ) : (
                         <button
@@ -1488,11 +1710,20 @@ function ContenidoChofer() {
                           <img
                             src={fotoDano}
                             alt="Evidencia de daño"
-                            className="w-16 h-16 rounded-lg object-cover border border-rose-500"
+                            onClick={() =>
+                              setImagenAmpliada({
+                                titulo: 'Evidencia de daño',
+                                src: fotoDano,
+                              })
+                            }
+                            className="w-16 h-16 rounded-lg object-cover border border-rose-500 cursor-zoom-in hover:opacity-90 transition"
                           />
                           <button
                             type="button"
-                            onClick={() => setFotoDano('')}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setFotoDano('');
+                            }}
                             className="absolute -top-1.5 -right-1.5 bg-slate-900 text-white p-1 rounded-full border border-slate-700"
                           >
                             <Trash2 className="w-3 h-3" />
@@ -1551,19 +1782,69 @@ function ContenidoChofer() {
             </div>
 
             <div className="p-4 space-y-3">
-              {errorEscaner ? (
+              <div className="relative rounded-xl overflow-hidden bg-black aspect-square border border-slate-700">
+                <video ref={videoRef} playsInline muted className="w-full h-full object-cover" />
+              </div>
+
+              {errorEscaner && (
                 <p className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-xl p-3">
                   {errorEscaner}
                 </p>
-              ) : (
-                <div className="relative rounded-xl overflow-hidden bg-black aspect-square border border-slate-700">
-                  <video ref={videoRef} playsInline muted className="w-full h-full object-cover" />
-                </div>
               )}
 
+              <input
+                ref={fotoQrInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleLeerQrDesdeFoto}
+                className="hidden"
+              />
+
+              <button
+                type="button"
+                onClick={() => fotoQrInputRef.current?.click()}
+                className="w-full py-2.5 px-3 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 inline-flex items-center justify-center gap-2 transition"
+              >
+                <Camera className="w-4 h-4" />
+                <span>Leer QR desde foto / cámara</span>
+              </button>
+
               <p className="text-[11px] text-slate-400 text-center">
-                Apunta la cámara al código QR pegado en la unidad.
+                Apunta la cámara al QR de la unidad o usa la opción de foto en iPhone, Android o
+                PC.
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {imagenAmpliada && (
+        <div
+          onClick={() => setImagenAmpliada(null)}
+          className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full overflow-hidden shadow-2xl text-white"
+          >
+            <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+              <span className="text-sm font-bold">{imagenAmpliada.titulo}</span>
+              <button
+                type="button"
+                onClick={() => setImagenAmpliada(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg text-xs font-bold inline-flex items-center gap-1"
+              >
+                <span>Cerrar</span>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 flex items-center justify-center bg-black/50 max-h-[75vh] overflow-auto">
+              <img
+                src={imagenAmpliada.src}
+                alt={imagenAmpliada.titulo}
+                className="max-w-full max-h-[70vh] object-contain rounded-lg"
+              />
             </div>
           </div>
         </div>

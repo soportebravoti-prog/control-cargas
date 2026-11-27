@@ -197,6 +197,12 @@ export default function FlotaPage() {
   const [tab, setTab] = useState<'unidades' | 'choferes'>('unidades');
   const [originUrl, setOriginUrl] = useState<string>('');
 
+  // Visor de imagen ampliada
+  const [imagenAmpliada, setImagenAmpliada] = useState<{
+    titulo: string;
+    src: string;
+  } | null>(null);
+
   // Modal Unidad
   const [modalUnidadAbierto, setModalUnidadAbierto] = useState(false);
   const [unidadEditando, setUnidadEditando] = useState<UnidadExt | null>(null);
@@ -232,6 +238,15 @@ export default function FlotaPage() {
   const [cFotoLicencia, setCFotoLicencia] = useState('');
   const [cFotoIne, setCFotoIne] = useState('');
   const [guardandoChofer, setGuardandoChofer] = useState(false);
+
+  useEffect(() => {
+    if (!imagenAmpliada) return;
+    const alPresionarTecla = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setImagenAmpliada(null);
+    };
+    window.addEventListener('keydown', alPresionarTecla);
+    return () => window.removeEventListener('keydown', alPresionarTecla);
+  }, [imagenAmpliada]);
 
   useEffect(() => {
     setOriginUrl(window.location.origin);
@@ -783,7 +798,13 @@ export default function FlotaPage() {
                             key={idx}
                             src={src}
                             alt={`${u.nombre} vista ${idx + 1}`}
-                            className="w-full h-14 object-cover rounded-lg border border-slate-700/60"
+                            onClick={() =>
+                              setImagenAmpliada({
+                                titulo: `${u.nombre} — Vista ${idx + 1}`,
+                                src,
+                              })
+                            }
+                            className="w-full h-14 object-cover rounded-lg border border-slate-700/60 cursor-zoom-in hover:opacity-90 transition"
                           />
                         ))}
                       </div>
@@ -919,7 +940,13 @@ export default function FlotaPage() {
                           <img
                             src={c.fotoPerfil}
                             alt={c.nombre}
-                            className="w-11 h-11 rounded-full object-cover border-2 border-amber-500 shrink-0"
+                            onClick={() =>
+                              setImagenAmpliada({
+                                titulo: `Foto perfil — ${c.nombre}`,
+                                src: c.fotoPerfil!,
+                              })
+                            }
+                            className="w-11 h-11 rounded-full object-cover border-2 border-amber-500 shrink-0 cursor-zoom-in hover:opacity-90 transition"
                           />
                         ) : (
                           <div className="w-11 h-11 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-sm text-amber-400 shrink-0">
@@ -1014,7 +1041,7 @@ export default function FlotaPage() {
       {modalUnidadAbierto && (
         <div
           onClick={() => setModalUnidadAbierto(false)}
-          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+          className="fixed inset-0 z-40 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
         >
           <form
             onSubmit={guardarUnidad}
@@ -1189,9 +1216,10 @@ export default function FlotaPage() {
                           {imgActual && (
                             <button
                               type="button"
-                              onClick={() =>
-                                setUFotos((prev) => ({ ...prev, [campo]: undefined }))
-                              }
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setUFotos((prev) => ({ ...prev, [campo]: undefined }));
+                              }}
                               className="text-rose-400 hover:text-rose-300"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -1203,7 +1231,14 @@ export default function FlotaPage() {
                           <img
                             src={imgActual}
                             alt={etiqueta}
-                            className="w-full h-20 object-cover rounded-lg border border-slate-700"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setImagenAmpliada({
+                                titulo: `${uNombre || 'Unidad'} — ${etiqueta}`,
+                                src: imgActual,
+                              });
+                            }}
+                            className="w-full h-20 object-cover rounded-lg border border-slate-700 cursor-zoom-in hover:opacity-90 transition"
                           />
                         ) : (
                           <label className="h-20 border border-dashed border-slate-700 rounded-lg flex flex-col items-center justify-center text-[11px] text-slate-400 hover:border-amber-500 hover:text-amber-300 cursor-pointer transition">
@@ -1248,7 +1283,7 @@ export default function FlotaPage() {
       {unidadQr && (
         <div
           onClick={() => setUnidadQr(null)}
-          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-40 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -1309,7 +1344,7 @@ export default function FlotaPage() {
       {modalChoferAbierto && (
         <div
           onClick={() => setModalChoferAbierto(false)}
-          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+          className="fixed inset-0 z-40 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
         >
           <form
             onSubmit={guardarChofer}
@@ -1421,7 +1456,10 @@ export default function FlotaPage() {
                       {valor && (
                         <button
                           type="button"
-                          onClick={limpiar}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            limpiar();
+                          }}
                           className="text-rose-400 hover:text-rose-300"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -1432,7 +1470,14 @@ export default function FlotaPage() {
                       <img
                         src={valor}
                         alt={etiqueta}
-                        className="w-full h-20 object-cover rounded-lg border border-slate-700"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setImagenAmpliada({
+                            titulo: `${cNombre || 'Chofer'} — ${etiqueta}`,
+                            src: valor,
+                          });
+                        }}
+                        className="w-full h-20 object-cover rounded-lg border border-slate-700 cursor-zoom-in hover:opacity-90 transition"
                       />
                     ) : (
                       <label className="h-20 border border-dashed border-slate-700 rounded-lg flex flex-col items-center justify-center text-[11px] text-slate-400 hover:border-amber-500 cursor-pointer">
@@ -1469,6 +1514,37 @@ export default function FlotaPage() {
               </div>
             </div>
           </form>
+        </div>
+      )}
+
+      {imagenAmpliada && (
+        <div
+          onClick={() => setImagenAmpliada(null)}
+          className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full overflow-hidden shadow-2xl text-white"
+          >
+            <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+              <span className="text-sm font-bold">{imagenAmpliada.titulo}</span>
+              <button
+                type="button"
+                onClick={() => setImagenAmpliada(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg text-xs font-bold inline-flex items-center gap-1"
+              >
+                <span>Cerrar</span>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 flex items-center justify-center bg-black/50 max-h-[75vh] overflow-auto">
+              <img
+                src={imagenAmpliada.src}
+                alt={imagenAmpliada.titulo}
+                className="max-w-full max-h-[70vh] object-contain rounded-lg"
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>
