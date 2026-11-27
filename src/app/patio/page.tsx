@@ -30,12 +30,85 @@ import {
   ChevronUp,
   Flag,
   Truck,
+  RotateCcw,
 } from 'lucide-react';
 
+type UnidadExtendida = Unidad & {
+  marca?: string;
+  modelo?: string;
+  submarca?: string;
+  version?: string;
+  descripcion?: string;
+  tipo?: string;
+  color?: string;
+  anio?: string | number;
+};
+
+type CargaExtendida = Carga & {
+  unidadId?: string;
+  unidadModelo?: string;
+};
+
+function normalizar(txt?: string): string {
+  return (txt || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function obtenerDetalleModeloUnidad(u: UnidadExtendida): string {
+  const nombreNorm = normalizar(u.nombre);
+  const candidatos = [
+    u.marcaModelo,
+    u.modelo,
+    u.submarca,
+    u.version,
+    u.marca,
+    u.descripcion,
+    u.tipo,
+    u.color,
+    u.anio ? String(u.anio) : '',
+  ]
+    .map((v) => (v || '').trim())
+    .filter(Boolean);
+
+  const unicos: string[] = [];
+  for (const item of candidatos) {
+    const itemNorm = normalizar(item);
+    if (!itemNorm || itemNorm === nombreNorm) continue;
+    if (!unicos.some((existente) => normalizar(existente) === itemNorm)) {
+      unicos.push(item);
+    }
+  }
+  return unicos.join(' • ');
+}
+
+function formatearEtiquetaUnidad(u: UnidadExtendida, estaEnRuta = false): string {
+  const modelo = obtenerDetalleModeloUnidad(u);
+  const placas = (u.placas || '').trim();
+  const partes = [u.nombre];
+  if (modelo) partes.push(modelo);
+  if (placas) partes.push(`Placas: ${placas}`);
+  let texto = partes.join(' — ');
+  if (estaEnRuta) texto += ' [EN RUTA]';
+  return texto;
+}
+
+function cargaPerteneceAUnidad(carga: CargaExtendida, unidad: UnidadExtendida): boolean {
+  if (carga.unidadId) {
+    return carga.unidadId === unidad.id;
+  }
+  const cNombre = normalizar(carga.unidadNombre);
+  const uNombre = normalizar(unidad.nombre);
+  const uEtiqueta = normalizar(formatearEtiquetaUnidad(unidad, false));
+  return Boolean(cNombre && (cNombre === uNombre || cNombre === uEtiqueta));
+}
+
 export default function PatioPage() {
-  const [unidades, setUnidades] = useState<Unidad[]>([]);
+  const [unidades, setUnidades] = useState<UnidadExtendida[]>([]);
   const [choferes, setChoferes] = useState<Chofer[]>([]);
-  const [cargasHoy, setCargasHoy] = useState<Carga[]>([]);
+  const [cargasHoy, setCargasHoy] = useState<CargaExtendida[]>([]);
   const [hoy, setHoy] = useState('');
   const [fechaDescarga, setFechaDescarga] = useState('');
   const [descargando, setDescargando] = useState(false);
@@ -51,11 +124,14 @@ export default function PatioPage() {
   const [loading, setLoading] = useState(false);
 
   // Modal cuando seleccionan una unidad que sigue EN_RUTA
-  const [cargaEnRutaPorFinalizar, setCargaEnRutaPorFinalizar] = useState<Carga | null>(null);
+  const [cargaEnRutaPorFinalizar, setCargaEnRutaPorFinalizar] = useState<CargaExtendida | null>(
+    null
+  );
   const [finalizandoId, setFinalizandoId] = useState<string | null>(null);
+  const [retomandoId, setRetomandoId] = useState<string | null>(null);
 
   // Modal de cancelación integrado
-  const [cargaACancelar, setCargaACancelar] = useState<Carga | null>(null);
+  const [cargaACancelar, setCargaACancelar] = useState<CargaExtendida | null>(null);
   const [motivoCancelacion, setMotivoCancelacion] = useState('');
   const [cancelandoId, setCancelandoId] = useState<string | null>(null);
 
@@ -126,7 +202,7 @@ export default function PatioPage() {
     const qCargas = query(collection(db, 'cargas'), where('fechaOperacion', '==', hoy));
 
     const unsubU = onSnapshot(qUnidades, (snap) => {
-      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Unidad));
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as UnidadExtendida));
       list.sort((a, b) => a.nombre.localeCompare(b.nombre));
       setUnidades(list);
     });
@@ -138,7 +214,7 @@ export default function PatioPage() {
     });
 
     const unsubCa = onSnapshot(qCargas, (snap) => {
-      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Carga));
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as CargaExtendida));
       list.sort((a, b) => (b.horaInicio || '').localeCompare(a.horaInicio || ''));
 
       const mapaActual =
@@ -218,7 +294,7 @@ export default function PatioPage() {
     }
 
     const activaEnRuta = cargasHoy.find(
-      (c) => c.unidadNombre === unidad.nombre && c.estado === 'EN_RUTA'
+      (c) => cargaPerteneceAUnidad(c, unidad) && c.estado === 'EN_RUTA'
     );
     if (activaEnRuta) {
       setCargaEnRutaPorFinalizar(activaEnRuta);
@@ -234,6 +310,18 @@ export default function PatioPage() {
       });
     } finally {
       setFinalizandoId(null);
+    }
+  };
+
+  const retomarRuta = async (cargaId: string) => {
+    try {
+      setRetomandoId(cargaId);
+      await updateDoc(doc(db, 'cargas', cargaId), {
+        estado: 'EN_RUTA',
+        horaRegreso: null,
+      });
+    } finally {
+      setRetomandoId(null);
     }
   };
 
@@ -256,9 +344,13 @@ export default function PatioPage() {
   };
 
   const unidadSeleccionada = unidades.find((u) => u.id === unidadId);
+  const modeloUnidadSeleccionada = unidadSeleccionada
+    ? obtenerDetalleModeloUnidad(unidadSeleccionada)
+    : '';
+
   const vueltaCalculada = unidadSeleccionada
     ? cargasHoy.filter(
-        (c) => c.unidadNombre === unidadSeleccionada.nombre && c.estado !== 'CANCELADA'
+        (c) => cargaPerteneceAUnidad(c, unidadSeleccionada) && c.estado !== 'CANCELADA'
       ).length + 1
     : 1;
 
@@ -268,9 +360,10 @@ export default function PatioPage() {
 
     const unidad = unidades.find((u) => u.id === unidadId)!;
     const chofer = choferes.find((c) => c.id === choferId)!;
+    const modeloUnidad = obtenerDetalleModeloUnidad(unidad);
 
     const sigueEnRuta = cargasHoy.find(
-      (c) => c.unidadNombre === unidad.nombre && c.estado === 'EN_RUTA'
+      (c) => cargaPerteneceAUnidad(c, unidad) && c.estado === 'EN_RUTA'
     );
     if (sigueEnRuta) {
       setCargaEnRutaPorFinalizar(sigueEnRuta);
@@ -283,7 +376,10 @@ export default function PatioPage() {
 
     setLoading(true);
     await addDoc(collection(db, 'cargas'), {
+      unidadId: unidad.id,
       unidadNombre: unidad.nombre,
+      unidadModelo: modeloUnidad,
+      choferId: chofer.id,
       choferNombre: chofer.nombre,
       destino: destino.trim(),
       remisiones: listaFinal,
@@ -344,7 +440,7 @@ export default function PatioPage() {
     });
   };
 
-  const abrirModalCancelacion = (carga: Carga) => {
+  const abrirModalCancelacion = (carga: CargaExtendida) => {
     setCargaACancelar(carga);
     setMotivoCancelacion('');
   };
@@ -371,6 +467,18 @@ export default function PatioPage() {
     } finally {
       setCancelandoId(null);
     }
+  };
+
+  const resolverModeloDeCarga = (carga: CargaExtendida): string => {
+    if (carga.unidadModelo && carga.unidadModelo.trim()) {
+      return carga.unidadModelo.trim();
+    }
+    const u = unidades.find(
+      (item) =>
+        (carga.unidadId && item.id === carga.unidadId) ||
+        normalizar(item.nombre) === normalizar(carga.unidadNombre)
+    );
+    return u ? obtenerDetalleModeloUnidad(u) : '';
   };
 
   const cargandoAhora = cargasHoy.filter((c) => c.estado === 'CARGANDO');
@@ -402,7 +510,6 @@ export default function PatioPage() {
       </header>
 
       <div className="max-w-6xl mx-auto p-4 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Columna izquierda: Operación de patio */}
         <div className="lg:col-span-8 space-y-6">
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -445,7 +552,9 @@ export default function PatioPage() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Unidad *</label>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  Unidad y Modelo *
+                </label>
                 <select
                   required
                   value={unidadId}
@@ -455,11 +564,11 @@ export default function PatioPage() {
                   <option value="">Seleccionar unidad...</option>
                   {unidades.map((u) => {
                     const estaEnRuta = cargasHoy.some(
-                      (c) => c.unidadNombre === u.nombre && c.estado === 'EN_RUTA'
+                      (c) => cargaPerteneceAUnidad(c, u) && c.estado === 'EN_RUTA'
                     );
                     return (
                       <option key={u.id} value={u.id}>
-                        {u.nombre} {u.placas ? `(${u.placas})` : ''} {estaEnRuta ? '• [En ruta]' : ''}
+                        {formatearEtiquetaUnidad(u, estaEnRuta)}
                       </option>
                     );
                   })}
@@ -484,8 +593,38 @@ export default function PatioPage() {
               </div>
             </div>
 
+            {unidadSeleccionada && (
+              <div className="rounded-xl bg-amber-50 border border-amber-300 px-3.5 py-2.5 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="bg-amber-600 text-white p-2 rounded-lg shrink-0">
+                    <Truck className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-extrabold text-slate-900 truncate">
+                      {unidadSeleccionada.nombre}
+                      {modeloUnidadSeleccionada ? ` — ${modeloUnidadSeleccionada}` : ''}
+                    </p>
+                    <p className="text-xs text-slate-600 truncate">
+                      Placas:{' '}
+                      <span className="font-semibold">
+                        {unidadSeleccionada.placas || 'Sin placas'}
+                      </span>
+                      {!modeloUnidadSeleccionada && (
+                        <span className="text-amber-700">
+                          {' '}
+                          • (Sin modelo capturado en Control de Flota)
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Destino / Ruta *</label>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Destino / Ruta *
+              </label>
               <input
                 type="text"
                 required
@@ -564,138 +703,146 @@ export default function PatioPage() {
                 No hay unidades cargando en este momento.
               </div>
             ) : (
-              cargandoAhora.map((carga) => (
-                <div
-                  key={carga.id}
-                  className="bg-white rounded-2xl p-5 shadow-sm border-l-4 border-l-amber-500 border border-slate-200 space-y-4"
-                >
-                  <div className="flex justify-between items-start gap-2">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-lg text-slate-900">{carga.unidadNombre}</span>
-                        <span className="text-xs font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
-                          Vuelta #{carga.vuelta}
-                        </span>
+              cargandoAhora.map((carga) => {
+                const modeloUnidad = resolverModeloDeCarga(carga);
+                return (
+                  <div
+                    key={carga.id}
+                    className="bg-white rounded-2xl p-5 shadow-sm border-l-4 border-l-amber-500 border border-slate-200 space-y-4"
+                  >
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-lg text-slate-900">
+                            {carga.unidadNombre}
+                            {modeloUnidad ? ` — ${modeloUnidad}` : ''}
+                          </span>
+                          <span className="text-xs font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
+                            Vuelta #{carga.vuelta}
+                          </span>
+                        </div>
+
+                        <p className="text-sm text-slate-600 font-medium mt-0.5">
+                          Chofer: <span className="text-slate-900">{carga.choferNombre}</span>
+                        </p>
+
+                        {editandoDestinoId === carga.id ? (
+                          <div className="flex items-center gap-1.5 mt-1.5">
+                            <input
+                              type="text"
+                              value={nuevoDestino}
+                              onChange={(e) => setNuevoDestino(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  guardarDestino(carga.id);
+                                }
+                              }}
+                              className="flex-1 text-sm rounded-lg border border-amber-400 px-2.5 py-1.5 outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => guardarDestino(carga.id)}
+                              className="bg-emerald-600 text-white p-1.5 rounded-lg hover:bg-emerald-500"
+                              title="Guardar destino"
+                            >
+                              <Check className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditandoDestinoId(null)}
+                              className="bg-slate-200 text-slate-700 p-1.5 rounded-lg hover:bg-slate-300"
+                              title="Cancelar"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-sm text-slate-600 font-medium">
+                              Destino: <span className="text-slate-900">{carga.destino}</span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => iniciarEdicionDestino(carga)}
+                              className="text-xs text-amber-700 hover:text-amber-900 inline-flex items-center gap-1 font-semibold"
+                            >
+                              <Pencil className="w-3 h-3" /> Editar
+                            </button>
+                          </div>
+                        )}
                       </div>
 
-                      <p className="text-sm text-slate-600 font-medium mt-0.5">
-                        Chofer: <span className="text-slate-900">{carga.choferNombre}</span>
-                      </p>
+                      <span className="text-xs text-slate-500 shrink-0">
+                        Inicio:{' '}
+                        {carga.horaInicio
+                          ? new Date(carga.horaInicio).toLocaleTimeString('es-MX', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })
+                          : '--:--'}
+                      </span>
+                    </div>
 
-                      {editandoDestinoId === carga.id ? (
-                        <div className="flex items-center gap-1.5 mt-1.5">
-                          <input
-                            type="text"
-                            value={nuevoDestino}
-                            onChange={(e) => setNuevoDestino(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault();
-                                guardarDestino(carga.id);
-                              }
-                            }}
-                            className="flex-1 text-sm rounded-lg border border-amber-400 px-2.5 py-1.5 outline-none"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => guardarDestino(carga.id)}
-                            className="bg-emerald-600 text-white p-1.5 rounded-lg hover:bg-emerald-500"
-                            title="Guardar destino"
+                    <div>
+                      <div className="text-xs font-semibold text-slate-500 mb-1.5">
+                        Remisiones ({carga.remisiones.length}):
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 mb-2">
+                        {carga.remisiones.map((r: string) => (
+                          <span
+                            key={r}
+                            className="inline-flex items-center gap-1 bg-slate-100 border border-slate-300 text-slate-800 text-xs font-bold px-2.5 py-1 rounded-md"
                           >
-                            <Check className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setEditandoDestinoId(null)}
-                            className="bg-slate-200 text-slate-700 p-1.5 rounded-lg hover:bg-slate-300"
-                            title="Cancelar"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-sm text-slate-600 font-medium">
-                            Destino: <span className="text-slate-900">{carga.destino}</span>
+                            {r}
+                            <button
+                              type="button"
+                              onClick={() => quitarRemisionDeCarga(carga, r)}
+                              title={`Quitar ${r}`}
+                              className="text-slate-400 hover:text-red-600"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => iniciarEdicionDestino(carga)}
-                            className="text-xs text-amber-700 hover:text-amber-900 inline-flex items-center gap-1 font-semibold"
-                          >
-                            <Pencil className="w-3 h-3" /> Editar
-                          </button>
-                        </div>
-                      )}
-                    </div>
+                        ))}
+                      </div>
 
-                    <span className="text-xs text-slate-500 shrink-0">
-                      Inicio:{' '}
-                      {new Date(carga.horaInicio).toLocaleTimeString('es-MX', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </span>
-                  </div>
-
-                  <div>
-                    <div className="text-xs font-semibold text-slate-500 mb-1.5">
-                      Remisiones ({carga.remisiones.length}):
-                    </div>
-                    <div className="flex flex-wrap gap-1.5 mb-2">
-                      {carga.remisiones.map((r: string) => (
-                        <span
-                          key={r}
-                          className="inline-flex items-center gap-1 bg-slate-100 border border-slate-300 text-slate-800 text-xs font-bold px-2.5 py-1 rounded-md"
-                        >
-                          {r}
-                          <button
-                            type="button"
-                            onClick={() => quitarRemisionDeCarga(carga, r)}
-                            title={`Quitar ${r}`}
-                            className="text-slate-400 hover:text-red-600"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-
-                    <div className="flex gap-2 mt-2">
-                      <input
-                        type="text"
-                        placeholder="+ Añadir otra remisión..."
-                        value={extraRemision[carga.id] || ''}
-                        onChange={(e) =>
-                          setExtraRemision({ ...extraRemision, [carga.id]: e.target.value })
-                        }
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            agregarRemisionACarga(carga);
+                      <div className="flex gap-2 mt-2">
+                        <input
+                          type="text"
+                          placeholder="+ Añadir otra remisión..."
+                          value={extraRemision[carga.id] || ''}
+                          onChange={(e) =>
+                            setExtraRemision({ ...extraRemision, [carga.id]: e.target.value })
                           }
-                        }}
-                        className="flex-1 text-sm rounded-lg border border-slate-300 px-3 py-2 uppercase outline-none focus:border-amber-500"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => agregarRemisionACarga(carga)}
-                        className="text-xs font-bold bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded-lg"
-                      >
-                        Sumar
-                      </button>
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              agregarRemisionACarga(carga);
+                            }
+                          }}
+                          className="flex-1 text-sm rounded-lg border border-slate-300 px-3 py-2 uppercase outline-none focus:border-amber-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => agregarRemisionACarga(carga)}
+                          className="text-xs font-bold bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded-lg"
+                        >
+                          Sumar
+                        </button>
+                      </div>
                     </div>
-                  </div>
 
-                  <button
-                    onClick={() => despacharUnidad(carga.id)}
-                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 shadow-sm transition"
-                  >
-                    <CheckCircle2 className="w-5 h-5" />
-                    Listo / Salió a Ruta
-                  </button>
-                </div>
-              ))
+                    <button
+                      onClick={() => despacharUnidad(carga.id)}
+                      className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 shadow-sm transition"
+                    >
+                      <CheckCircle2 className="w-5 h-5" />
+                      Listo / Salió a Ruta
+                    </button>
+                  </div>
+                );
+              })
             )}
           </div>
 
@@ -709,164 +856,171 @@ export default function PatioPage() {
                 No hay unidades en ruta en este momento.
               </div>
             ) : (
-              enRutaHoy.map((carga) => (
-                <div
-                  key={carga.id}
-                  className="bg-white rounded-2xl p-5 shadow-sm border-l-4 border-l-emerald-500 border border-slate-200 space-y-3"
-                >
-                  <div className="flex justify-between items-start gap-2">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-lg text-slate-900">{carga.unidadNombre}</span>
-                        <span className="text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded">
-                          Vuelta #{carga.vuelta}
-                        </span>
-                      </div>
-
-                      <p className="text-sm text-slate-600 font-medium mt-0.5">
-                        Chofer: <span className="text-slate-900">{carga.choferNombre}</span>
-                      </p>
-
-                      {editandoDestinoId === carga.id ? (
-                        <div className="flex items-center gap-1.5 mt-1.5">
-                          <input
-                            type="text"
-                            value={nuevoDestino}
-                            onChange={(e) => setNuevoDestino(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault();
-                                guardarDestino(carga.id);
-                              }
-                            }}
-                            className="flex-1 text-sm rounded-lg border border-emerald-400 px-2.5 py-1.5 outline-none"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => guardarDestino(carga.id)}
-                            className="bg-emerald-600 text-white p-1.5 rounded-lg hover:bg-emerald-500"
-                            title="Guardar destino"
-                          >
-                            <Check className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setEditandoDestinoId(null)}
-                            className="bg-slate-200 text-slate-700 p-1.5 rounded-lg hover:bg-slate-300"
-                            title="Cancelar"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-sm text-slate-600 font-medium">
-                            Destino: <span className="text-slate-900">{carga.destino}</span>
+              enRutaHoy.map((carga) => {
+                const modeloUnidad = resolverModeloDeCarga(carga);
+                return (
+                  <div
+                    key={carga.id}
+                    className="bg-white rounded-2xl p-5 shadow-sm border-l-4 border-l-emerald-500 border border-slate-200 space-y-3"
+                  >
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-lg text-slate-900">
+                            {carga.unidadNombre}
+                            {modeloUnidad ? ` — ${modeloUnidad}` : ''}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => iniciarEdicionDestino(carga)}
-                            className="text-xs text-emerald-700 hover:text-emerald-900 inline-flex items-center gap-1 font-semibold"
-                          >
-                            <Pencil className="w-3 h-3" /> Editar
-                          </button>
+                          <span className="text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded">
+                            Vuelta #{carga.vuelta || 1}
+                          </span>
                         </div>
-                      )}
+
+                        <p className="text-sm text-slate-600 font-medium mt-0.5">
+                          Chofer: <span className="text-slate-900">{carga.choferNombre}</span>
+                        </p>
+
+                        {editandoDestinoId === carga.id ? (
+                          <div className="flex items-center gap-1.5 mt-1.5">
+                            <input
+                              type="text"
+                              value={nuevoDestino}
+                              onChange={(e) => setNuevoDestino(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  guardarDestino(carga.id);
+                                }
+                              }}
+                              className="flex-1 text-sm rounded-lg border border-emerald-400 px-2.5 py-1.5 outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => guardarDestino(carga.id)}
+                              className="bg-emerald-600 text-white p-1.5 rounded-lg hover:bg-emerald-500"
+                              title="Guardar destino"
+                            >
+                              <Check className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditandoDestinoId(null)}
+                              className="bg-slate-200 text-slate-700 p-1.5 rounded-lg hover:bg-slate-300"
+                              title="Cancelar"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-sm text-slate-600 font-medium">
+                              Destino: <span className="text-slate-900">{carga.destino}</span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => iniciarEdicionDestino(carga)}
+                              className="text-xs text-emerald-700 hover:text-emerald-900 inline-flex items-center gap-1 font-semibold"
+                            >
+                              <Pencil className="w-3 h-3" /> Editar
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="text-right text-xs text-slate-500 shrink-0">
+                        <div>
+                          Cargó:{' '}
+                          {carga.horaInicio
+                            ? new Date(carga.horaInicio).toLocaleTimeString('es-MX', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })
+                            : '--:--'}
+                        </div>
+                        <div className="text-emerald-700 font-bold">
+                          Salió:{' '}
+                          {carga.horaSalida
+                            ? new Date(carga.horaSalida).toLocaleTimeString('es-MX', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })
+                            : '--:--'}
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="text-right text-xs text-slate-500 shrink-0">
-                      <div>
-                        Cargó:{' '}
-                        {new Date(carga.horaInicio).toLocaleTimeString('es-MX', {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </div>
-                      <div className="text-emerald-700 font-bold">
-                        Salió:{' '}
-                        {carga.horaSalida
-                          ? new Date(carga.horaSalida).toLocaleTimeString('es-MX', {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })
-                          : '--:--'}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {carga.remisiones.map((r: string) => (
-                        <span
-                          key={r}
-                          className="inline-flex items-center gap-1 bg-slate-100 border border-slate-300 text-slate-800 text-xs font-bold px-2.5 py-1 rounded-md"
-                        >
-                          {r}
-                          <button
-                            type="button"
-                            onClick={() => quitarRemisionDeCarga(carga, r)}
-                            title={`Quitar ${r}`}
-                            className="text-slate-400 hover:text-red-600"
+                    <div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {carga.remisiones.map((r: string) => (
+                          <span
+                            key={r}
+                            className="inline-flex items-center gap-1 bg-slate-100 border border-slate-300 text-slate-800 text-xs font-bold px-2.5 py-1 rounded-md"
                           >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </span>
-                      ))}
+                            {r}
+                            <button
+                              type="button"
+                              onClick={() => quitarRemisionDeCarga(carga, r)}
+                              title={`Quitar ${r}`}
+                              className="text-slate-400 hover:text-red-600"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+
+                      <div className="flex gap-2 mt-2">
+                        <input
+                          type="text"
+                          placeholder="+ Añadir remisión olvidada..."
+                          value={extraRemision[carga.id] || ''}
+                          onChange={(e) =>
+                            setExtraRemision({ ...extraRemision, [carga.id]: e.target.value })
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              agregarRemisionACarga(carga);
+                            }
+                          }}
+                          className="flex-1 text-sm rounded-lg border border-slate-300 px-3 py-2 uppercase outline-none focus:border-emerald-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => agregarRemisionACarga(carga)}
+                          className="text-xs font-bold bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded-lg"
+                        >
+                          Sumar
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="flex gap-2 mt-2">
-                      <input
-                        type="text"
-                        placeholder="+ Añadir remisión olvidada..."
-                        value={extraRemision[carga.id] || ''}
-                        onChange={(e) =>
-                          setExtraRemision({ ...extraRemision, [carga.id]: e.target.value })
-                        }
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            agregarRemisionACarga(carga);
-                          }
-                        }}
-                        className="flex-1 text-sm rounded-lg border border-slate-300 px-3 py-2 uppercase outline-none focus:border-emerald-500"
-                      />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                       <button
                         type="button"
-                        onClick={() => agregarRemisionACarga(carga)}
-                        className="text-xs font-bold bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded-lg"
+                        onClick={() => finalizarRuta(carga.id)}
+                        disabled={finalizandoId === carga.id}
+                        className="w-full bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl flex items-center justify-center gap-2 text-sm shadow-sm transition"
                       >
-                        Sumar
+                        <Flag className="w-4 h-4" />
+                        {finalizandoId === carga.id ? 'Finalizando...' : 'Finalizar Ruta'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => abrirModalCancelacion(carga)}
+                        disabled={cancelandoId === carga.id}
+                        className="w-full bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-700 border border-red-200 font-bold py-2.5 rounded-xl flex items-center justify-center gap-2 text-sm transition"
+                      >
+                        <Ban className="w-4 h-4" />
+                        {cancelandoId === carga.id ? 'Cancelando...' : 'Cancelar Salida'}
                       </button>
                     </div>
                   </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => finalizarRuta(carga.id)}
-                      disabled={finalizandoId === carga.id}
-                      className="w-full bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl flex items-center justify-center gap-2 text-sm shadow-sm transition"
-                    >
-                      <Flag className="w-4 h-4" />
-                      {finalizandoId === carga.id ? 'Finalizando...' : 'Finalizar Ruta'}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => abrirModalCancelacion(carga)}
-                      disabled={cancelandoId === carga.id}
-                      className="w-full bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-700 border border-red-200 font-bold py-2.5 rounded-xl flex items-center justify-center gap-2 text-sm transition"
-                    >
-                      <Ban className="w-4 h-4" />
-                      {cancelandoId === carga.id ? 'Cancelando...' : 'Cancelar Salida'}
-                    </button>
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
 
-          {/* Historial de rutas finalizadas hoy */}
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
             <button
               type="button"
@@ -893,50 +1047,67 @@ export default function PatioPage() {
                     Aún no hay rutas finalizadas hoy.
                   </p>
                 ) : (
-                  finalizadasHoy.map((carga) => (
-                    <div
-                      key={carga.id}
-                      className="bg-sky-50/60 border border-sky-200/80 rounded-xl p-3.5 space-y-1.5 text-sm"
-                    >
-                      <div className="flex justify-between items-start gap-2">
-                        <div>
-                          <span className="font-bold text-slate-800">{carga.unidadNombre}</span>{' '}
-                          <span className="text-xs text-slate-500">
-                            • Vuelta #{carga.vuelta} • {carga.choferNombre}
-                          </span>
-                          <div className="text-xs text-slate-600">Ruta / Destino: {carga.destino}</div>
-                        </div>
-                        <span className="text-xs font-semibold text-sky-700 shrink-0">
-                          Regresó{' '}
-                          {carga.horaRegreso
-                            ? new Date(carga.horaRegreso).toLocaleTimeString('es-MX', {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })
-                            : ''}
-                        </span>
-                      </div>
-
-                      {carga.remisiones.length > 0 && (
-                        <div className="flex flex-wrap gap-1 pt-0.5">
-                          {carga.remisiones.map((r: string) => (
-                            <span
-                              key={r}
-                              className="text-xs bg-white border border-sky-200 text-slate-700 px-2 py-0.5 rounded font-medium"
-                            >
-                              {r}
+                  finalizadasHoy.map((carga) => {
+                    const modeloUnidad = resolverModeloDeCarga(carga);
+                    return (
+                      <div
+                        key={carga.id}
+                        className="bg-sky-50/60 border border-sky-200/80 rounded-xl p-3.5 space-y-2.5 text-sm"
+                      >
+                        <div className="flex justify-between items-start gap-2">
+                          <div>
+                            <span className="font-bold text-slate-800">
+                              {carga.unidadNombre}
+                              {modeloUnidad ? ` — ${modeloUnidad}` : ''}
+                            </span>{' '}
+                            <span className="text-xs text-slate-500">
+                              - Vuelta #{carga.vuelta || 1} • {carga.choferNombre}
                             </span>
-                          ))}
+                            <div className="text-xs text-slate-600">
+                              Ruta / Destino: {carga.destino}
+                            </div>
+                          </div>
+                          <span className="text-xs font-semibold text-sky-700 shrink-0">
+                            Regresó{' '}
+                            {carga.horaRegreso
+                              ? new Date(carga.horaRegreso).toLocaleTimeString('es-MX', {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })
+                              : ''}
+                          </span>
                         </div>
-                      )}
-                    </div>
-                  ))
+
+                        {carga.remisiones.length > 0 && (
+                          <div className="flex flex-wrap gap-1 pt-0.5">
+                            {carga.remisiones.map((r: string) => (
+                              <span
+                                key={r}
+                                className="text-xs bg-white border border-sky-200 text-slate-700 px-2 py-0.5 rounded font-medium"
+                              >
+                                {r}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => retomarRuta(carga.id)}
+                          disabled={retomandoId === carga.id}
+                          className="w-full sm:w-auto bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold px-3.5 py-2 rounded-xl inline-flex items-center justify-center gap-1.5 text-xs shadow-sm transition"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          {retomandoId === carga.id ? 'Retomando...' : 'Retomar Ruta'}
+                        </button>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             )}
           </div>
 
-          {/* Historial de cancelaciones hoy */}
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
             <button
               type="button"
@@ -963,63 +1134,67 @@ export default function PatioPage() {
                     No hay salidas canceladas hoy.
                   </p>
                 ) : (
-                  canceladasHoy.map((carga) => (
-                    <div
-                      key={carga.id}
-                      className="bg-red-50/50 border border-red-200/80 rounded-xl p-3.5 space-y-1.5 text-sm"
-                    >
-                      <div className="flex justify-between items-start gap-2">
-                        <div>
-                          <span className="font-bold text-slate-800">{carga.unidadNombre}</span>{' '}
-                          <span className="text-xs text-slate-500">
-                            • Vuelta #{carga.vuelta} • {carga.choferNombre}
-                          </span>
-                          <div className="text-xs text-slate-600">Destino: {carga.destino}</div>
-                        </div>
-                        <span className="text-xs font-semibold text-red-700 shrink-0">
-                          Cancelada{' '}
-                          {carga.horaCancelacion
-                            ? new Date(carga.horaCancelacion).toLocaleTimeString('es-MX', {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })
-                            : ''}
-                        </span>
-                      </div>
-
-                      {carga.motivoCancelacion && (
-                        <p className="text-xs text-red-800 bg-red-100/70 rounded-lg px-2.5 py-1">
-                          Motivo: {carga.motivoCancelacion}
-                        </p>
-                      )}
-
-                      {carga.remisiones.length > 0 && (
-                        <div className="flex flex-wrap gap-1 pt-0.5">
-                          {carga.remisiones.map((r: string) => (
-                            <span
-                              key={r}
-                              className="text-xs bg-white border border-red-200 text-slate-700 px-2 py-0.5 rounded"
-                            >
-                              {r}
+                  canceladasHoy.map((carga) => {
+                    const modeloUnidad = resolverModeloDeCarga(carga);
+                    return (
+                      <div
+                        key={carga.id}
+                        className="bg-red-50/50 border border-red-200/80 rounded-xl p-3.5 space-y-1.5 text-sm"
+                      >
+                        <div className="flex justify-between items-start gap-2">
+                          <div>
+                            <span className="font-bold text-slate-800">
+                              {carga.unidadNombre}
+                              {modeloUnidad ? ` — ${modeloUnidad}` : ''}
+                            </span>{' '}
+                            <span className="text-xs text-slate-500">
+                              - Vuelta #{carga.vuelta || 1} • {carga.choferNombre}
                             </span>
-                          ))}
+                            <div className="text-xs text-slate-600">Destino: {carga.destino}</div>
+                          </div>
+                          <span className="text-xs font-semibold text-red-700 shrink-0">
+                            Cancelada{' '}
+                            {carga.horaCancelacion
+                              ? new Date(carga.horaCancelacion).toLocaleTimeString('es-MX', {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })
+                              : ''}
+                          </span>
                         </div>
-                      )}
-                    </div>
-                  ))
+
+                        {carga.motivoCancelacion && (
+                          <p className="text-xs text-red-800 bg-red-100/70 rounded-lg px-2.5 py-1">
+                            Motivo: {carga.motivoCancelacion}
+                          </p>
+                        )}
+
+                        {carga.remisiones.length > 0 && (
+                          <div className="flex flex-wrap gap-1 pt-0.5">
+                            {carga.remisiones.map((r: string) => (
+                              <span
+                                key={r}
+                                className="text-xs bg-white border border-red-200 text-slate-700 px-2 py-0.5 rounded"
+                              >
+                                {r}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
                 )}
               </div>
             )}
           </div>
         </div>
 
-        {/* Columna derecha: Panel de Avisos y botón "Generar pendientes" */}
         <aside className="lg:col-span-4 lg:sticky lg:top-20">
           <PanelAvisos variante="patio" />
         </aside>
       </div>
 
-      {/* Modal: Unidad actualmente en ruta al intentar seleccionarla */}
       {cargaEnRutaPorFinalizar && (
         <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-[2px] flex items-center justify-center p-4">
           <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden">
@@ -1030,7 +1205,11 @@ export default function PatioPage() {
               <div>
                 <h3 className="font-bold text-base leading-tight">Esta unidad está en ruta</h3>
                 <p className="text-xs text-slate-300">
-                  {cargaEnRutaPorFinalizar.unidadNombre} • Vuelta #{cargaEnRutaPorFinalizar.vuelta}
+                  {cargaEnRutaPorFinalizar.unidadNombre}
+                  {resolverModeloDeCarga(cargaEnRutaPorFinalizar)
+                    ? ` — ${resolverModeloDeCarga(cargaEnRutaPorFinalizar)}`
+                    : ''}{' '}
+                  • Vuelta #{cargaEnRutaPorFinalizar.vuelta || 1}
                 </p>
               </div>
             </div>
@@ -1041,8 +1220,10 @@ export default function PatioPage() {
                   Esta unidad está en ruta, ¿deseas finalizar?
                 </p>
                 <p>
-                  Ruta actual: <span className="font-semibold">{cargaEnRutaPorFinalizar.destino}</span> •
-                  Chofer: <span className="font-semibold">{cargaEnRutaPorFinalizar.choferNombre}</span>
+                  Ruta actual:{' '}
+                  <span className="font-semibold">{cargaEnRutaPorFinalizar.destino}</span> •
+                  Chofer:{' '}
+                  <span className="font-semibold">{cargaEnRutaPorFinalizar.choferNombre}</span>
                 </p>
                 {cargaEnRutaPorFinalizar.remisiones.length > 0 && (
                   <p className="text-slate-500">
@@ -1075,7 +1256,6 @@ export default function PatioPage() {
         </div>
       )}
 
-      {/* Modal: Confirmar cancelación de salida */}
       {cargaACancelar && (
         <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-[2px] flex items-center justify-center p-4">
           <form
@@ -1092,7 +1272,11 @@ export default function PatioPage() {
                 <div>
                   <h3 className="font-bold text-base leading-tight">Cancelar Salida a Ruta</h3>
                   <p className="text-xs text-slate-300">
-                    {cargaACancelar.unidadNombre} • Vuelta #{cargaACancelar.vuelta}
+                    {cargaACancelar.unidadNombre}
+                    {resolverModeloDeCarga(cargaACancelar)
+                      ? ` — ${resolverModeloDeCarga(cargaACancelar)}`
+                      : ''}{' '}
+                    • Vuelta #{cargaACancelar.vuelta || 1}
                   </p>
                 </div>
               </div>
