@@ -28,6 +28,61 @@ interface UnidadDemorada {
   minutos: number;
 }
 
+interface ChoferMonitor {
+  id: string;
+  nombre?: string;
+  licencia?: string;
+  licenciaUrl?: string;
+  fotoLicencia?: string;
+  numeroLicencia?: string;
+  folioLicencia?: string;
+  vigenciaLicencia?: string;
+  fechaVencimientoLicencia?: string;
+  licenciaVencida?: boolean;
+  tieneLicencia?: boolean;
+}
+
+type CargaExtendida = Carga & {
+  choferId?: string;
+};
+
+function normalizarTexto(txt?: string | null): string {
+  return (txt || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function choferSinLicenciaRegistrada(ch?: ChoferMonitor | null): boolean {
+  if (!ch) return true;
+  if (ch.tieneLicencia === false || ch.licenciaVencida === true) return true;
+
+  const tieneDatoLicencia = Boolean(
+    (ch.licencia && String(ch.licencia).trim()) ||
+      (ch.licenciaUrl && String(ch.licenciaUrl).trim()) ||
+      (ch.fotoLicencia && String(ch.fotoLicencia).trim()) ||
+      (ch.numeroLicencia && String(ch.numeroLicencia).trim()) ||
+      (ch.folioLicencia && String(ch.folioLicencia).trim()) ||
+      (ch.vigenciaLicencia && String(ch.vigenciaLicencia).trim()) ||
+      (ch.fechaVencimientoLicencia && String(ch.fechaVencimientoLicencia).trim())
+  );
+
+  if (!tieneDatoLicencia) return true;
+
+  const fechaVigencia = ch.fechaVencimientoLicencia || ch.vigenciaLicencia;
+  if (fechaVigencia) {
+    const parsed = Date.parse(fechaVigencia);
+    if (!Number.isNaN(parsed)) {
+      const hoyFin = new Date();
+      hoyFin.setHours(0, 0, 0, 0);
+      if (parsed < hoyFin.getTime()) return true;
+    }
+  }
+
+  return false;
+}
+
 function formatearHoraLocal(iso?: string | null) {
   if (!iso) return '--:--';
   const fecha = new Date(iso);
@@ -55,7 +110,8 @@ function formatearDuracion(minutos: number | null) {
 }
 
 export default function MonitorPage() {
-  const [cargas, setCargas] = useState<Carga[]>([]);
+  const [cargas, setCargas] = useState<CargaExtendida[]>([]);
+  const [choferes, setChoferes] = useState<ChoferMonitor[]>([]);
   const [busqueda, setBusqueda] = useState('');
   const [hoy, setHoy] = useState('');
   const [fechaDescarga, setFechaDescarga] = useState('');
@@ -95,6 +151,12 @@ export default function MonitorPage() {
   };
 
   const reproducirTono = (tipo: 'CARGANDO' | 'SALIDA' | 'FINALIZADA') => {
+    const src =
+      tipo === 'FINALIZADA'
+        ? '/sonido-finalizado.mp3'
+        : tipo === 'SALIDA'
+        ? '/sonido-salida.mp3'
+        : '/sonido-cargando.mp3';
     const audio =
       tipo === 'FINALIZADA'
         ? audioFinalizadoRef.current
@@ -104,7 +166,11 @@ export default function MonitorPage() {
     if (!audio) return;
     audio.volume = 1;
     audio.currentTime = 0;
-    audio.play().catch(() => {});
+    audio.play().catch(() => {
+      const respaldo = new Audio(src);
+      respaldo.volume = 1;
+      respaldo.play().catch(() => {});
+    });
   };
 
   useEffect(() => {
@@ -129,6 +195,14 @@ export default function MonitorPage() {
   }, []);
 
   useEffect(() => {
+    const unsubChoferes = onSnapshot(collection(db, 'choferes'), (snap) => {
+      const lista = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ChoferMonitor));
+      setChoferes(lista);
+    });
+    return () => unsubChoferes();
+  }, []);
+
+  useEffect(() => {
     if (!hoy) return;
 
     cargaInicialRef.current = true;
@@ -138,7 +212,7 @@ export default function MonitorPage() {
 
     const q = query(collection(db, 'cargas'), where('fechaOperacion', '==', hoy));
     const unsub = onSnapshot(q, (snap) => {
-      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Carga));
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as CargaExtendida));
       list.sort((a, b) => (b.horaInicio || '').localeCompare(a.horaInicio || ''));
 
       const mapaActual =
@@ -167,7 +241,7 @@ export default function MonitorPage() {
           const previo = mapaActual[c.id];
           if (!previo && c.estado === 'CARGANDO') {
             huboNuevaCarga = true;
-          } else if (previo && previo !== 'EN_RUTA' && c.estado === 'EN_RUTA') {
+          } else if ((!previo || previo !== 'EN_RUTA') && c.estado === 'EN_RUTA') {
             huboNuevaSalida = true;
           } else if (previo && previo !== 'FINALIZADA' && c.estado === 'FINALIZADA') {
             huboFinalizacion = true;
@@ -196,6 +270,16 @@ export default function MonitorPage() {
 
     return () => unsub();
   }, [hoy]);
+
+  const buscarChoferDeCarga = (carga: CargaExtendida): ChoferMonitor | undefined => {
+    if (carga.choferId) {
+      const porId = choferes.find((ch) => ch.id === carga.choferId);
+      if (porId) return porId;
+    }
+    const nombreCarga = normalizarTexto(carga.choferNombre);
+    if (!nombreCarga) return undefined;
+    return choferes.find((ch) => normalizarTexto(ch.nombre) === nombreCarga);
+  };
 
   const handleDescargar = async () => {
     if (!fechaDescarga || descargando) return;
@@ -526,23 +610,52 @@ export default function MonitorPage() {
                   const duracionCarga = formatearDuracion(
                     obtenerMinutosDiferencia(c.horaInicio, c.horaSalida)
                   );
+                  const choferDoc = buscarChoferDeCarga(c);
+                  const sinLicencia = choferSinLicenciaRegistrada(choferDoc);
+
                   return (
                     <div
                       key={c.id}
-                      className="bg-slate-900 border border-slate-800 border-l-4 border-l-emerald-500 rounded-xl p-4 space-y-3"
+                      className={`relative overflow-hidden bg-slate-900 border rounded-xl p-4 space-y-3 ${
+                        sinLicencia
+                          ? 'border-red-500/40 border-l-4 border-l-red-500'
+                          : 'border-slate-800 border-l-4 border-l-emerald-500'
+                      }`}
                     >
+                      {sinLicencia && (
+                        <span
+                          aria-hidden="true"
+                          className="pointer-events-none absolute inset-y-0 left-0 w-1 bg-red-500 animate-pulse"
+                        />
+                      )}
+
                       <div className="flex items-start justify-between gap-2">
                         <div>
-                          <div className="flex items-center gap-2">
-                            <Truck className="w-4 h-4 text-emerald-400" />
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Truck
+                              className={`w-4 h-4 ${
+                                sinLicencia ? 'text-red-400' : 'text-emerald-400'
+                              }`}
+                            />
                             <span className="text-lg font-bold text-white">{c.unidadNombre}</span>
                             <span className="text-xs font-bold bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded">
                               Vuelta #{c.vuelta}
                             </span>
                           </div>
-                          <div className="text-sm text-slate-300 mt-0.5">
-                            Chofer: <span className="font-semibold text-white">{c.choferNombre}</span> •
-                            Destino: <span className="font-semibold text-emerald-300">{c.destino}</span>
+                          <div className="text-sm text-slate-300 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                            <span>
+                              Chofer:{' '}
+                              <span className="font-semibold text-white">{c.choferNombre}</span>
+                            </span>
+                            {sinLicencia && (
+                              <span className="text-[10px] font-bold uppercase tracking-tight px-1.5 py-0.2 rounded bg-red-500/15 text-red-400 border border-red-500/40 animate-pulse">
+                                sin licencia
+                              </span>
+                            )}
+                            <span>
+                              • Destino:{' '}
+                              <span className="font-semibold text-emerald-300">{c.destino}</span>
+                            </span>
                           </div>
                         </div>
 

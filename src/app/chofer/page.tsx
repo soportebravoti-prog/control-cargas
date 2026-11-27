@@ -41,6 +41,7 @@ interface CargaDoc {
   id: string;
   unidad?: string;
   unidadNombre?: string;
+  unidadModelo?: string;
   unidadId?: string;
   chofer?: string;
   choferNombre?: string;
@@ -56,15 +57,22 @@ interface CargaDoc {
   horaRegreso?: string;
 }
 
+type UnidadExtendida = Unidad & {
+  marca?: string;
+  modelo?: string;
+  submarca?: string;
+  version?: string;
+  descripcion?: string;
+  tipo?: string;
+  color?: string;
+  anio?: string | number;
+};
+
 const CLAVE_CHOFER_STORAGE = 'chofer-seleccionado-bravo';
 const CLAVE_UNIDAD_STORAGE = 'unidad-seleccionada-bravo';
 
 function obtenerFechaHoyIso(): string {
-  const ahora = new Date();
-  const y = ahora.getFullYear();
-  const m = String(ahora.getMonth() + 1).padStart(2, '0');
-  const d = String(ahora.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  return new Date().toLocaleDateString('en-CA');
 }
 
 function obtenerHoraActualTexto(): string {
@@ -86,10 +94,7 @@ function coincideNombre(a?: string, b?: string): boolean {
   const na = normalizarTexto(a);
   const nb = normalizarTexto(b);
   if (!na || !nb) return false;
-  if (na === nb) return true;
-  const primerA = na.split(/\s+/)[0];
-  const primerB = nb.split(/\s+/)[0];
-  return primerA.length >= 4 && primerA === primerB;
+  return na === nb;
 }
 
 function obtenerUnidadDeCarga(cg: CargaDoc): string {
@@ -98,6 +103,49 @@ function obtenerUnidadDeCarga(cg: CargaDoc): string {
 
 function obtenerChoferDeCarga(cg: CargaDoc): string {
   return (cg.choferNombre || cg.chofer || '').trim();
+}
+
+function obtenerDetalleModeloUnidad(u: UnidadExtendida): string {
+  const nombreNorm = normalizarTexto(u.nombre);
+  const candidatos = [
+    u.marcaModelo,
+    u.modelo,
+    u.submarca,
+    u.version,
+    u.marca,
+    u.descripcion,
+    u.tipo,
+    u.color,
+    u.anio ? String(u.anio) : '',
+  ]
+    .map((v) => (v || '').trim())
+    .filter(Boolean);
+
+  const unicos: string[] = [];
+  for (const item of candidatos) {
+    const itemNorm = normalizarTexto(item);
+    if (!itemNorm || itemNorm === nombreNorm) continue;
+    if (!unicos.some((existente) => normalizarTexto(existente) === itemNorm)) {
+      unicos.push(item);
+    }
+  }
+  return unicos.join(' • ');
+}
+
+function cargaPerteneceAUnidadExacta(cg: CargaDoc, unidad: UnidadExtendida): boolean {
+  if (cg.unidadId) {
+    return cg.unidadId === unidad.id;
+  }
+  const nombreCarga = normalizarTexto(obtenerUnidadDeCarga(cg));
+  const nombreUnidad = normalizarTexto(unidad.nombre);
+  if (!nombreCarga || nombreCarga !== nombreUnidad) return false;
+
+  const modeloCarga = normalizarTexto(cg.unidadModelo);
+  const modeloUnidad = normalizarTexto(obtenerDetalleModeloUnidad(unidad));
+  if (modeloCarga && modeloUnidad) {
+    return modeloCarga === modeloUnidad;
+  }
+  return true;
 }
 
 function esCargaAbierta(estado?: string): boolean {
@@ -176,7 +224,7 @@ function ContenidoChofer() {
   const unidadQueryParam = searchParams.get('unidad') || '';
 
   const [choferes, setChoferes] = useState<Chofer[]>([]);
-  const [unidades, setUnidades] = useState<Unidad[]>([]);
+  const [unidades, setUnidades] = useState<UnidadExtendida[]>([]);
   const [cargas, setCargas] = useState<CargaDoc[]>([]);
   const [revisionesHoy, setRevisionesHoy] = useState<
     Array<{ unidadId?: string; unidadNombre?: string; kilometraje?: number | null }>
@@ -194,23 +242,45 @@ function ContenidoChofer() {
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [ocupado, setOcupado] = useState(false);
 
-  // Escáner QR con @zxing/browser
+  // Audios del chofer
+  const audioSalidaRef = useRef<HTMLAudioElement | null>(null);
+  const audioFinalizadoRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    audioSalidaRef.current = new Audio('/sonido-salida.mp3');
+    audioFinalizadoRef.current = new Audio('/sonido-finalizado.mp3');
+  }, []);
+
+  const reproducirSonidoChofer = useCallback((tipo: 'SALIDA' | 'FINALIZADA') => {
+    const src = tipo === 'SALIDA' ? '/sonido-salida.mp3' : '/sonido-finalizado.mp3';
+    const refActual = tipo === 'SALIDA' ? audioSalidaRef.current : audioFinalizadoRef.current;
+    try {
+      const audio = refActual || new Audio(src);
+      audio.volume = 1;
+      audio.currentTime = 0;
+      audio.play().catch(() => {
+        const respaldo = new Audio(src);
+        respaldo.volume = 1;
+        respaldo.play().catch(() => {});
+      });
+    } catch {
+      // Ignorar si el navegador restringe audio
+    }
+  }, []);
+
   const [escanerAbierto, setEscanerAbierto] = useState(false);
   const [errorEscaner, setErrorEscaner] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const controlsRef = useRef<{ stop: () => void } | null>(null);
   const fotoQrInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Visor de imagen ampliada
   const [imagenAmpliada, setImagenAmpliada] = useState<{
     titulo: string;
     src: string;
   } | null>(null);
 
-  // Ruta sin remisiones
   const [destinoSinRemision, setDestinoSinRemision] = useState<string>('');
 
-  // 1. Revisión de Salida
   const [forzarRevisionSalida, setForzarRevisionSalida] = useState<boolean>(false);
   const [kmInicialHoy, setKmInicialHoy] = useState<number | null>(null);
   const [nivelCombustibleSalida, setNivelCombustibleSalida] = useState<
@@ -223,13 +293,11 @@ function ContenidoChofer() {
   const [kilometrajeSalida, setKilometrajeSalida] = useState<string>('');
   const [observacionesSalida, setObservacionesSalida] = useState<string>('');
 
-  // 2. Carga de gasolina
   const [litros, setLitros] = useState<string>('');
   const [monto, setMonto] = useState<string>('');
   const [odometro, setOdometro] = useState<string>('');
   const [notasGasolina, setNotasGasolina] = useState<string>('');
 
-  // 3. Cerrar Día
   const [nivelCombustibleCierre, setNivelCombustibleCierre] = useState<
     'VACIO' | '1/4' | '1/2' | '3/4' | 'LLENO'
   >('1/2');
@@ -256,7 +324,7 @@ function ContenidoChofer() {
     setMensajeEstado(null);
     setErrorBanner(texto);
     window.setTimeout(() => {
-      setErrorBanner((prev) => (prev === texto ? null : prev));
+      setErrorBanner((prev) => (prev ? null : prev));
     }, 6000);
   }, []);
 
@@ -298,7 +366,7 @@ function ContenidoChofer() {
     });
 
     const unsubU = onSnapshot(qUnidades, (snap) => {
-      const lista = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Unidad));
+      const lista = snap.docs.map((d) => ({ id: d.id, ...d.data() } as UnidadExtendida));
       lista.sort((a, b) => a.nombre.localeCompare(b.nombre));
       setUnidades(lista);
     });
@@ -332,9 +400,9 @@ function ContenidoChofer() {
     (
       cId: string,
       listaChoferes: Chofer[],
-      listaUnidades: Unidad[],
+      listaUnidades: UnidadExtendida[],
       listaCargas: CargaDoc[]
-    ): { unidad: Unidad; origen: 'PATIO' | 'BASE' } | null => {
+    ): { unidad: UnidadExtendida; origen: 'PATIO' | 'BASE' } | null => {
       const choferObj = listaChoferes.find((c) => c.id === cId);
       if (!choferObj) return null;
 
@@ -347,10 +415,11 @@ function ContenidoChofer() {
       );
 
       if (cargaActiva) {
-        const nombreUn = obtenerUnidadDeCarga(cargaActiva);
         const unPatio =
-          listaUnidades.find((u) => u.id === cargaActiva.unidadId) ||
-          listaUnidades.find((u) => normalizarTexto(u.nombre) === normalizarTexto(nombreUn));
+          (cargaActiva.unidadId
+            ? listaUnidades.find((u) => u.id === cargaActiva.unidadId)
+            : undefined) ||
+          listaUnidades.find((u) => cargaPerteneceAUnidadExacta(cargaActiva, u));
         if (unPatio) return { unidad: unPatio, origen: 'PATIO' };
       }
 
@@ -368,7 +437,7 @@ function ContenidoChofer() {
     (
       uId: string,
       listaChoferes: Chofer[],
-      listaUnidades: Unidad[],
+      listaUnidades: UnidadExtendida[],
       listaCargas: CargaDoc[]
     ): Chofer | null => {
       const unidadObj = listaUnidades.find((u) => u.id === uId);
@@ -377,8 +446,7 @@ function ContenidoChofer() {
       const cargaActiva = listaCargas.find(
         (cg) =>
           esCargaAbierta(cg.estado) &&
-          (cg.unidadId === unidadObj.id ||
-            normalizarTexto(obtenerUnidadDeCarga(cg)) === normalizarTexto(unidadObj.nombre)) &&
+          cargaPerteneceAUnidadExacta(cg, unidadObj) &&
           Boolean(obtenerChoferDeCarga(cg) || cg.choferId)
       );
 
@@ -508,8 +576,8 @@ function ContenidoChofer() {
     return (
       revisionesHoy.find(
         (r) =>
-          r.unidadId === unidadActual.id ||
-          normalizarTexto(r.unidadNombre) === normalizarTexto(unidadActual.nombre)
+          (r.unidadId && r.unidadId === unidadActual.id) ||
+          (!r.unidadId && normalizarTexto(r.unidadNombre) === normalizarTexto(unidadActual.nombre))
       ) || null
     );
   }, [revisionesHoy, unidadActual]);
@@ -522,7 +590,6 @@ function ContenidoChofer() {
     }
   }, [revisionUnidadActual, kmInicialHoy]);
 
-  // Lector QR con @zxing/browser para iPhone, Android y PC
   useEffect(() => {
     if (!escanerAbierto) return;
     let cancelado = false;
@@ -607,19 +674,25 @@ function ContenidoChofer() {
     const abiertas = cargas.filter((cg) => esCargaAbierta(cg.estado));
     if (!choferActual && !unidadActual) return [];
 
-    return abiertas.filter((cg) => {
-      const nombreCh = obtenerChoferDeCarga(cg);
-      const nombreUn = obtenerUnidadDeCarga(cg);
+    if (choferActual) {
+      return abiertas.filter((cg) => {
+        const nombreCh = obtenerChoferDeCarga(cg);
+        const perteneceAlChofer = cg.choferId
+          ? cg.choferId === choferActual.id
+          : coincideNombre(nombreCh, choferActual.nombre);
 
-      const matchChofer =
-        choferActual !== null &&
-        (cg.choferId === choferActual.id || coincideNombre(nombreCh, choferActual.nombre));
-      const matchUnidad =
-        unidadActual !== null &&
-        (cg.unidadId === unidadActual.id ||
-          normalizarTexto(nombreUn) === normalizarTexto(unidadActual.nombre));
-      return matchChofer || matchUnidad;
-    });
+        if (!perteneceAlChofer) return false;
+
+        if (unidadActual && cg.unidadId) {
+          return cg.unidadId === unidadActual.id;
+        }
+        return true;
+      });
+    }
+
+    return abiertas.filter(
+      (cg) => unidadActual !== null && cargaPerteneceAUnidadExacta(cg, unidadActual)
+    );
   }, [cargas, choferActual, unidadActual]);
 
   const registrarRevisionObligatoriaSiFalta = async (): Promise<boolean> => {
@@ -644,6 +717,7 @@ function ContenidoChofer() {
       tipoReporte: 'REVISION_SALIDA',
       unidadId: unidadActual.id,
       unidadNombre: unidadActual.nombre,
+      unidadModelo: obtenerDetalleModeloUnidad(unidadActual),
       choferId: choferActual.id,
       choferNombre: choferActual.nombre,
       nivelCombustible: nivelCombustibleSalida,
@@ -675,13 +749,16 @@ function ContenidoChofer() {
 
       const fechaHoy = obtenerFechaHoyIso();
       const ahoraIso = new Date().toISOString();
+      const modeloUnidad = obtenerDetalleModeloUnidad(unidadActual);
 
-      // Si Patio ya creó una carga abierta para esta unidad, la reutiliza para no duplicar
       const cargaAbiertaUnidad = cargas.find(
         (cg) =>
           esCargaAbierta(cg.estado) &&
-          (cg.unidadId === unidadActual.id ||
-            normalizarTexto(obtenerUnidadDeCarga(cg)) === normalizarTexto(unidadActual.nombre))
+          cargaPerteneceAUnidadExacta(cg, unidadActual) &&
+          (!choferActual ||
+            !cg.choferId ||
+            cg.choferId === choferActual.id ||
+            coincideNombre(obtenerChoferDeCarga(cg), choferActual.nombre))
       );
 
       if (cargaAbiertaUnidad) {
@@ -690,9 +767,14 @@ function ContenidoChofer() {
           return;
         }
         await updateDoc(doc(db, 'cargas', cargaAbiertaUnidad.id), {
+          unidadId: unidadActual.id,
+          unidadModelo: modeloUnidad,
+          choferId: choferActual?.id || cargaAbiertaUnidad.choferId || null,
+          fechaOperacion: fechaHoy,
           estado: 'EN_RUTA',
           horaSalida: ahoraIso,
         });
+        reproducirSonidoChofer('SALIDA');
         mostrarAviso(`Revisión lista y ruta iniciada para ${unidadActual.nombre}.`);
         return;
       }
@@ -700,13 +782,14 @@ function ContenidoChofer() {
       const vueltasHoyUnidad = cargas.filter(
         (cg) =>
           (cg.fechaOperacion || cg.fechaIso) === fechaHoy &&
-          normalizarTexto(obtenerUnidadDeCarga(cg)) === normalizarTexto(unidadActual.nombre) &&
+          cargaPerteneceAUnidadExacta(cg, unidadActual) &&
           normalizarTexto(cg.estado) !== 'cancelada'
       ).length;
 
       await addDoc(collection(db, 'cargas'), {
         unidadId: unidadActual.id,
         unidadNombre: unidadActual.nombre,
+        unidadModelo: modeloUnidad,
         unidad: unidadActual.nombre,
         choferId: choferActual?.id || null,
         choferNombre: choferActual?.nombre || 'Operador en ruta',
@@ -722,6 +805,7 @@ function ContenidoChofer() {
         horaRegreso: null,
       });
 
+      reproducirSonidoChofer('SALIDA');
       setDestinoSinRemision('');
       mostrarAviso(
         `Revisión guardada y ruta iniciada para ${unidadActual.nombre} (sin remisiones).`
@@ -735,7 +819,6 @@ function ContenidoChofer() {
     }
   };
 
-  // Inicia una carga ya registrada por Patio (conservando sus remisiones y destino)
   const revisarYIniciarRuta = async (carga: CargaDoc) => {
     if (ocupado) return;
     try {
@@ -745,9 +828,18 @@ function ContenidoChofer() {
       if (!okRevision) return;
 
       await updateDoc(doc(db, 'cargas', carga.id), {
+        ...(unidadActual
+          ? {
+              unidadId: unidadActual.id,
+              unidadModelo: obtenerDetalleModeloUnidad(unidadActual),
+            }
+          : {}),
+        ...(choferActual ? { choferId: choferActual.id } : {}),
+        fechaOperacion: carga.fechaOperacion || obtenerFechaHoyIso(),
         estado: 'EN_RUTA',
         horaSalida: new Date().toISOString(),
       });
+      reproducirSonidoChofer('SALIDA');
       mostrarAviso(
         `Revisión confirmada y ruta iniciada para ${obtenerUnidadDeCarga(carga) || 'la unidad'}.`
       );
@@ -768,6 +860,7 @@ function ContenidoChofer() {
         estado: 'FINALIZADA',
         horaRegreso: new Date().toISOString(),
       });
+      reproducirSonidoChofer('FINALIZADA');
       mostrarAviso(`Entrega finalizada para ${obtenerUnidadDeCarga(carga) || 'la unidad'}.`);
     } catch (err) {
       mostrarError(
@@ -802,6 +895,7 @@ function ContenidoChofer() {
         tipoReporte: 'GASOLINA',
         unidadId: unidadActual.id,
         unidadNombre: unidadActual.nombre,
+        unidadModelo: obtenerDetalleModeloUnidad(unidadActual),
         choferId: choferActual.id,
         choferNombre: choferActual.nombre,
         litros: litrosNum,
@@ -873,6 +967,7 @@ function ContenidoChofer() {
         tipoReporte: 'CIERRE_DIA',
         unidadId: unidadActual.id,
         unidadNombre: unidadActual.nombre,
+        unidadModelo: obtenerDetalleModeloUnidad(unidadActual),
         choferId: choferActual.id,
         choferNombre: choferActual.nombre,
         nivelCombustible: nivelCombustibleCierre,
@@ -896,6 +991,7 @@ function ContenidoChofer() {
         });
       }
 
+      reproducirSonidoChofer('FINALIZADA');
       setJornadaCerradaInfo({ hora: horaCierre, unidad: unidadActual.nombre });
       setKilometrajeCierre('');
       setTieneGolpeODano(false);
@@ -1083,6 +1179,8 @@ function ContenidoChofer() {
       ? Number(kilometrajeCierre) - kmInicialHoy
       : null;
 
+  const detalleModeloActual = unidadActual ? obtenerDetalleModeloUnidad(unidadActual) : '';
+
   return (
     <div
       className={`min-h-screen pb-14 transition-colors ${
@@ -1228,10 +1326,13 @@ function ContenidoChofer() {
                 }`}
               >
                 <div>
-                  <p className="font-extrabold text-sm">{unidadActual.nombre}</p>
+                  <p className="font-extrabold text-sm">
+                    {unidadActual.nombre}
+                    {detalleModeloActual ? ` — ${detalleModeloActual}` : ''}
+                  </p>
                   <p className={`text-xs ${esOscuro ? 'text-slate-400' : 'text-slate-500'}`}>
-                    {unidadActual.placas || 'Sin placas'}{' '}
-                    {unidadActual.marcaModelo ? `• ${unidadActual.marcaModelo}` : ''}
+                    {unidadActual.placas || 'Sin placas'}
+                    {detalleModeloActual ? ` • ${detalleModeloActual}` : ''}
                   </p>
                 </div>
 
@@ -1255,11 +1356,16 @@ function ContenidoChofer() {
                 className={claseCampo}
               >
                 <option value="">-- Escanea QR o elige tu unidad --</option>
-                {unidades.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.nombre} {u.placas ? `(${u.placas})` : ''}
-                  </option>
-                ))}
+                {unidades.map((u) => {
+                  const detalleModelo = obtenerDetalleModeloUnidad(u);
+                  return (
+                    <option key={u.id} value={u.id}>
+                      {u.nombre}
+                      {detalleModelo ? ` — ${detalleModelo}` : ''}
+                      {u.placas ? ` (${u.placas})` : ''}
+                    </option>
+                  );
+                })}
               </select>
             )}
           </div>
@@ -1332,7 +1438,11 @@ function ContenidoChofer() {
                   <Route className="w-4 h-4 text-emerald-400 shrink-0" />
                   <p className="font-bold text-sm">
                     Salida sin remisiones —{' '}
-                    {unidadActual ? unidadActual.nombre : choferActual?.nombre}
+                    {unidadActual
+                      ? `${unidadActual.nombre}${
+                          detalleModeloActual ? ` (${detalleModeloActual})` : ''
+                        }`
+                      : choferActual?.nombre}
                   </p>
                 </div>
 
@@ -1370,6 +1480,14 @@ function ContenidoChofer() {
                 const enRuta = esCargaEnRuta(cg.estado);
                 const nombreUn = obtenerUnidadDeCarga(cg);
                 const nombreCh = obtenerChoferDeCarga(cg);
+                const unidadObjCarga = unidades.find(
+                  (u) =>
+                    (cg.unidadId && u.id === cg.unidadId) ||
+                    (!cg.unidadId && normalizarTexto(u.nombre) === normalizarTexto(nombreUn))
+                );
+                const modeloCarga =
+                  (cg.unidadModelo || '').trim() ||
+                  (unidadObjCarga ? obtenerDetalleModeloUnidad(unidadObjCarga) : '');
 
                 return (
                   <div key={cg.id} className={`border rounded-2xl p-4 space-y-4 ${claseTarjeta}`}>
@@ -1386,6 +1504,7 @@ function ContenidoChofer() {
                         </span>
                         <h2 className="text-lg font-extrabold">
                           {nombreUn || 'Unidad sin nombre'}
+                          {modeloCarga ? ` — ${modeloCarga}` : ''}
                         </h2>
                         {nombreCh && (
                           <p

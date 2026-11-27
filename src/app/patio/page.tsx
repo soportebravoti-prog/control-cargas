@@ -123,14 +123,12 @@ export default function PatioPage() {
   const [nuevoDestino, setNuevoDestino] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Modal cuando seleccionan una unidad que sigue EN_RUTA
   const [cargaEnRutaPorFinalizar, setCargaEnRutaPorFinalizar] = useState<CargaExtendida | null>(
     null
   );
   const [finalizandoId, setFinalizandoId] = useState<string | null>(null);
   const [retomandoId, setRetomandoId] = useState<string | null>(null);
 
-  // Modal de cancelación integrado
   const [cargaACancelar, setCargaACancelar] = useState<CargaExtendida | null>(null);
   const [motivoCancelacion, setMotivoCancelacion] = useState('');
   const [cancelandoId, setCancelandoId] = useState<string | null>(null);
@@ -138,7 +136,6 @@ export default function PatioPage() {
   const [mostrarFinalizadas, setMostrarFinalizadas] = useState(false);
   const [mostrarCanceladas, setMostrarCanceladas] = useState(false);
 
-  // Alertas sonoras en Patio
   const audioCargandoRef = useRef<HTMLAudioElement | null>(null);
   const audioSalidaRef = useRef<HTMLAudioElement | null>(null);
   const audioFinalizadoRef = useRef<HTMLAudioElement | null>(null);
@@ -171,6 +168,12 @@ export default function PatioPage() {
   };
 
   const reproducirTono = (tipo: 'CARGANDO' | 'SALIDA' | 'FINALIZADA') => {
+    const src =
+      tipo === 'FINALIZADA'
+        ? '/sonido-finalizado.mp3'
+        : tipo === 'SALIDA'
+        ? '/sonido-salida.mp3'
+        : '/sonido-cargando.mp3';
     const audio =
       tipo === 'FINALIZADA'
         ? audioFinalizadoRef.current
@@ -180,7 +183,11 @@ export default function PatioPage() {
     if (!audio) return;
     audio.volume = 1;
     audio.currentTime = 0;
-    audio.play().catch(() => {});
+    audio.play().catch(() => {
+      const respaldo = new Audio(src);
+      respaldo.volume = 1;
+      respaldo.play().catch(() => {});
+    });
   };
 
   useEffect(() => {
@@ -243,7 +250,7 @@ export default function PatioPage() {
           const previo = mapaActual[c.id];
           if (!previo && c.estado === 'CARGANDO') {
             huboNuevaCarga = true;
-          } else if (previo && previo !== 'EN_RUTA' && c.estado === 'EN_RUTA') {
+          } else if ((!previo || previo !== 'EN_RUTA') && c.estado === 'EN_RUTA') {
             huboNuevaSalida = true;
           } else if (previo && previo !== 'FINALIZADA' && c.estado === 'FINALIZADA') {
             huboFinalizacion = true;
