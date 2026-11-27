@@ -66,6 +66,7 @@ interface CargaEstadoDoc {
   unidadId?: string;
   unidadNombre?: string;
   unidad?: string;
+  unidadModelo?: string;
   choferId?: string;
   choferNombre?: string;
   chofer?: string;
@@ -75,7 +76,7 @@ interface CargaEstadoDoc {
   fechaIso?: string;
 }
 
-function normalizarNombre(txt?: string): string {
+function normalizarTexto(txt?: string | null): string {
   return (txt || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -83,23 +84,51 @@ function normalizarNombre(txt?: string): string {
     .toLowerCase();
 }
 
-function coincideNombreChofer(a?: string, b?: string): boolean {
-  const na = normalizarNombre(a);
-  const nb = normalizarNombre(b);
-  if (!na || !nb) return false;
-  if (na === nb) return true;
-  const primerA = na.split(/\s+/)[0];
-  const primerB = nb.split(/\s+/)[0];
-  return primerA.length >= 4 && primerA === primerB;
+function coincideChoferEstricto(
+  cg: CargaEstadoDoc,
+  ch: ChoferExt
+): boolean {
+  if (cg.choferId) {
+    return cg.choferId === ch.id;
+  }
+  const nombreCarga = normalizarTexto(cg.choferNombre || cg.chofer);
+  const nombreChofer = normalizarTexto(ch.nombre);
+  return Boolean(nombreCarga && nombreChofer && nombreCarga === nombreChofer);
+}
+
+function cargaCorrespondeAUnidad(
+  cg: CargaEstadoDoc,
+  u: UnidadExt
+): boolean {
+  // Prioridad absoluta: ID único de la unidad en Firestore
+  if (cg.unidadId) {
+    return cg.unidadId === u.id;
+  }
+
+  // Fallback solo para registros antiguos sin unidadId:
+  // exige coincidencia exacta de nombre y, si trae modelo, que coincida con tipo/marcaModelo
+  const nombreCarga = normalizarTexto(cg.unidadNombre || cg.unidad);
+  const nombreUnidad = normalizarTexto(u.nombre);
+  if (!nombreCarga || !nombreUnidad || nombreCarga !== nombreUnidad) {
+    return false;
+  }
+
+  const modeloCarga = normalizarTexto(cg.unidadModelo);
+  const detalleUnidad = normalizarTexto(u.tipo || u.marcaModelo);
+  if (modeloCarga && detalleUnidad) {
+    return modeloCarga === detalleUnidad;
+  }
+
+  return true;
 }
 
 function esEstadoEnRuta(estado?: string): boolean {
-  const limpio = normalizarNombre(estado).replace(/\s+/g, '_');
+  const limpio = normalizarTexto(estado).replace(/\s+/g, '_');
   return limpio.includes('ruta') || limpio.includes('salio') || limpio.includes('transito');
 }
 
 function esEstadoCargando(estado?: string): boolean {
-  const limpio = normalizarNombre(estado).replace(/\s+/g, '_');
+  const limpio = normalizarTexto(estado).replace(/\s+/g, '_');
   return limpio.includes('carg');
 }
 
@@ -280,69 +309,86 @@ export default function FlotaPage() {
     };
   }, []);
 
-  const estadoOperativoPorUnidad = useMemo(() => {
-    const enRutaPorId = new Set<string>();
-    const enRutaPorNombre = new Map<string, { chofer?: string; destino?: string }>();
-    const cargandoPorNombre = new Set<string>();
-
-    cargasOperativas.forEach((cg) => {
-      const fechaDoc = cg.fechaOperacion || cg.fechaIso;
-      if (hoyIso && fechaDoc && fechaDoc !== hoyIso) return;
-
-      const nombreUn = normalizarNombre(cg.unidadNombre || cg.unidad);
-      if (esEstadoEnRuta(cg.estado)) {
-        if (cg.unidadId) enRutaPorId.add(cg.unidadId);
-        if (nombreUn) {
-          enRutaPorNombre.set(nombreUn, {
-            chofer: cg.choferNombre || cg.chofer,
-            destino: cg.destino,
-          });
-        }
-      } else if (esEstadoCargando(cg.estado)) {
-        if (nombreUn) cargandoPorNombre.add(nombreUn);
-      }
-    });
-
-    return { enRutaPorId, enRutaPorNombre, cargandoPorNombre };
-  }, [cargasOperativas, hoyIso]);
-
-  const estadoOperativoPorChofer = useMemo(() => {
-    const cargasHoyActivas = cargasOperativas.filter((cg) => {
+  const cargasHoyActivas = useMemo(() => {
+    return cargasOperativas.filter((cg) => {
       const fechaDoc = cg.fechaOperacion || cg.fechaIso;
       if (hoyIso && fechaDoc && fechaDoc !== hoyIso) return false;
       return esEstadoActivoOperativo(cg.estado);
     });
+  }, [cargasOperativas, hoyIso]);
 
+  const estadoOperativoPorUnidad = useMemo(() => {
+    const mapa = new Map<
+      string,
+      { enRuta: boolean; cargando: boolean; chofer?: string; destino?: string }
+    >();
+
+    unidades.forEach((u) => {
+      const cargaActiva = cargasHoyActivas.find((cg) => cargaCorrespondeAUnidad(cg, u));
+      if (!cargaActiva) {
+        mapa.set(u.id, { enRuta: false, cargando: false });
+        return;
+      }
+
+      const enRuta = esEstadoEnRuta(cargaActiva.estado);
+      const cargando = !enRuta && esEstadoCargando(cargaActiva.estado);
+      mapa.set(u.id, {
+        enRuta,
+        cargando,
+        chofer: cargaActiva.choferNombre || cargaActiva.chofer,
+        destino: cargaActiva.destino,
+      });
+    });
+
+    return mapa;
+  }, [unidades, cargasHoyActivas]);
+
+  const estadoOperativoPorChofer = useMemo(() => {
     const mapa = new Map<
       string,
       { ocupado: boolean; tipo: 'En ruta' | 'Cargando'; detalle?: string }
     >();
 
     choferes.forEach((ch) => {
-      const cargaDirecta = cargasHoyActivas.find(
-        (cg) =>
-          cg.choferId === ch.id ||
-          coincideNombreChofer(cg.choferNombre || cg.chofer, ch.nombre)
+      const cargasDelChofer = cargasHoyActivas.filter((cg) =>
+        coincideChoferEstricto(cg, ch)
       );
 
-      if (cargaDirecta) {
-        const enRuta = esEstadoEnRuta(cargaDirecta.estado);
-        const unidadTxt = cargaDirecta.unidadNombre || cargaDirecta.unidad;
-        const destinoTxt = cargaDirecta.destino;
-        const detalle = [unidadTxt, destinoTxt ? `Destino: ${destinoTxt}` : '']
-          .filter(Boolean)
-          .join(' • ');
+      if (cargasDelChofer.length === 0) return;
 
-        mapa.set(ch.id, {
-          ocupado: true,
-          tipo: enRuta ? 'En ruta' : 'Cargando',
-          detalle,
-        });
-      }
+      // Priorizar la carga que esté EN_RUTA si existiera más de una por error operativo
+      const cargaPrincipal =
+        cargasDelChofer.find((cg) => esEstadoEnRuta(cg.estado)) || cargasDelChofer[0];
+
+      const enRuta = esEstadoEnRuta(cargaPrincipal.estado);
+      const unidadObj = cargaPrincipal.unidadId
+        ? unidades.find((u) => u.id === cargaPrincipal.unidadId)
+        : undefined;
+      const unidadTxt =
+        unidadObj?.nombre || cargaPrincipal.unidadNombre || cargaPrincipal.unidad;
+      const destinoTxt = cargaPrincipal.destino;
+
+      const avisoDoble =
+        cargasDelChofer.length > 1
+          ? ` (${cargasDelChofer.length} rutas activas — revisar)`
+          : '';
+
+      const detalle = [
+        unidadTxt,
+        destinoTxt ? `Destino: ${destinoTxt}` : '',
+      ]
+        .filter(Boolean)
+        .join(' • ') + avisoDoble;
+
+      mapa.set(ch.id, {
+        ocupado: true,
+        tipo: enRuta ? 'En ruta' : 'Cargando',
+        detalle,
+      });
     });
 
     return mapa;
-  }, [choferes, cargasOperativas, hoyIso]);
+  }, [choferes, cargasHoyActivas, unidades]);
 
   const unidadEstaIncompleta = (u: UnidadExt): boolean => {
     const tieneFotosBase = Boolean(
@@ -372,11 +418,11 @@ export default function FlotaPage() {
   );
 
   const unidadesEnRutaCount = useMemo(() => {
-    return unidades.filter(
-      (u) =>
-        estadoOperativoPorUnidad.enRutaPorId.has(u.id) ||
-        estadoOperativoPorUnidad.enRutaPorNombre.has(normalizarNombre(u.nombre))
-    ).length;
+    let total = 0;
+    unidades.forEach((u) => {
+      if (estadoOperativoPorUnidad.get(u.id)?.enRuta) total += 1;
+    });
+    return total;
   }, [unidades, estadoOperativoPorUnidad]);
 
   const choferesOcupadosCount = useMemo(() => {
@@ -725,12 +771,9 @@ export default function FlotaPage() {
         {tab === 'unidades' && (
           <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {unidades.map((u) => {
-              const nombreNorm = normalizarNombre(u.nombre);
-              const infoRuta = estadoOperativoPorUnidad.enRutaPorNombre.get(nombreNorm);
-              const estaEnRuta =
-                estadoOperativoPorUnidad.enRutaPorId.has(u.id) || Boolean(infoRuta);
-              const estaCargando =
-                !estaEnRuta && estadoOperativoPorUnidad.cargandoPorNombre.has(nombreNorm);
+              const infoOperativa = estadoOperativoPorUnidad.get(u.id);
+              const estaEnRuta = Boolean(infoOperativa?.enRuta);
+              const estaCargando = Boolean(infoOperativa?.cargando);
 
               const incompleta = unidadEstaIncompleta(u);
               const choferBase = choferes.find((c) => c.id === u.choferDefaultId);
@@ -772,10 +815,10 @@ export default function FlotaPage() {
                         >
                           {u.tipo || u.marcaModelo || 'Tipo sin especificar'}
                         </p>
-                        {estaEnRuta && infoRuta && (
+                        {estaEnRuta && infoOperativa && (
                           <p className="text-[11px] font-semibold text-emerald-400 mt-1 truncate">
-                            {infoRuta.chofer ? `Operador: ${infoRuta.chofer}` : ''}
-                            {infoRuta.destino ? ` • Destino: ${infoRuta.destino}` : ''}
+                            {infoOperativa.chofer ? `Operador: ${infoOperativa.chofer}` : ''}
+                            {infoOperativa.destino ? ` • Destino: ${infoOperativa.destino}` : ''}
                           </p>
                         )}
                       </div>
