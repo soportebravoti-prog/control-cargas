@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { db, Carga } from '@/lib/firebase';
+import { db, coleccion, Carga } from '@/lib/firebase';
 import { descargarCargasCSV } from '@/lib/exportarCargas';
 import { DesbloqueoAudioModal } from '@/components/DesbloqueoAudioModal';
 import { PanelAvisos } from '@/components/PanelAvisos';
+import ProteccionModulo from '@/components/ProteccionModulo';
+import BarraSesionModulo from '@/components/BarraSesionModulo';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
   Search,
@@ -21,6 +23,7 @@ import {
   AlertTriangle,
   Activity,
   Flag,
+  CalendarSync,
 } from 'lucide-react';
 
 interface UnidadDemorada {
@@ -45,6 +48,10 @@ interface ChoferMonitor {
 type CargaExtendida = Carga & {
   choferId?: string;
 };
+
+function obtenerFechaLocalIso(): string {
+  return new Date().toLocaleDateString('en-CA');
+}
 
 function normalizarTexto(txt?: string | null): string {
   return (txt || '')
@@ -109,21 +116,31 @@ function formatearDuracion(minutos: number | null) {
   return `${horas}h ${mins}m`;
 }
 
-export default function MonitorPage() {
+function MonitorContenido() {
   const [cargas, setCargas] = useState<CargaExtendida[]>([]);
   const [choferes, setChoferes] = useState<ChoferMonitor[]>([]);
   const [busqueda, setBusqueda] = useState('');
   const [hoy, setHoy] = useState('');
-  const [fechaDescarga, setFechaDescarga] = useState('');
+  const [fechaConsulta, setFechaConsulta] = useState('');
   const [descargando, setDescargando] = useState(false);
   const [horaActual, setHoraActual] = useState('');
   const [, setTick] = useState(0);
 
+  const hoyRef = useRef<string>('');
+  const fechaConsultaRef = useRef<string>('');
   const audioCargandoRef = useRef<HTMLAudioElement | null>(null);
   const audioSalidaRef = useRef<HTMLAudioElement | null>(null);
   const audioFinalizadoRef = useRef<HTMLAudioElement | null>(null);
   const estadosPreviosRef = useRef<Record<string, Carga['estado']>>({});
   const cargaInicialRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    hoyRef.current = hoy;
+  }, [hoy]);
+
+  useEffect(() => {
+    fechaConsultaRef.current = fechaConsulta;
+  }, [fechaConsulta]);
 
   useEffect(() => {
     audioCargandoRef.current = new Audio('/sonido-cargando.mp3');
@@ -174,28 +191,49 @@ export default function MonitorPage() {
   };
 
   useEffect(() => {
-    const actualizarHora = () => {
+    const fechaInicial = obtenerFechaLocalIso();
+    setHoy(fechaInicial);
+    setFechaConsulta(fechaInicial);
+    hoyRef.current = fechaInicial;
+    fechaConsultaRef.current = fechaInicial;
+
+    const actualizarRelojYDia = () => {
+      const ahora = new Date();
       setHoraActual(
-        new Date().toLocaleTimeString('es-MX', {
+        ahora.toLocaleTimeString('es-MX', {
           hour: '2-digit',
           minute: '2-digit',
           second: '2-digit',
         })
       );
+
+      const fechaCalendario = ahora.toLocaleDateString('en-CA');
+      if (hoyRef.current && fechaCalendario !== hoyRef.current) {
+        const diaAnterior = hoyRef.current;
+        hoyRef.current = fechaCalendario;
+        setHoy(fechaCalendario);
+
+        // Reinicia el tablero al cambiar de día para arrancar limpio el nuevo día operativo
+        estadosPreviosRef.current = {};
+        cargaInicialRef.current = true;
+        setCargas([]);
+
+        if (!fechaConsultaRef.current || fechaConsultaRef.current === diaAnterior) {
+          fechaConsultaRef.current = fechaCalendario;
+          setFechaConsulta(fechaCalendario);
+        }
+      }
+
       setTick((t) => (t + 1) % 60);
     };
 
-    const fechaHoy = new Date().toLocaleDateString('en-CA');
-    setHoy(fechaHoy);
-    setFechaDescarga(fechaHoy);
-    actualizarHora();
-
-    const reloj = setInterval(actualizarHora, 1000);
+    actualizarRelojYDia();
+    const reloj = setInterval(actualizarRelojYDia, 1000);
     return () => clearInterval(reloj);
   }, []);
 
   useEffect(() => {
-    const unsubChoferes = onSnapshot(collection(db, 'choferes'), (snap) => {
+    const unsubChoferes = onSnapshot(collection(db, coleccion('choferes')), (snap) => {
       const lista = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ChoferMonitor));
       setChoferes(lista);
     });
@@ -203,34 +241,29 @@ export default function MonitorPage() {
   }, []);
 
   useEffect(() => {
-    if (!hoy) return;
+    if (!fechaConsulta) return;
 
+    const esDiaEnVivo = fechaConsulta === hoy;
     cargaInicialRef.current = true;
-    if (estadosPreviosRef && typeof estadosPreviosRef === 'object') {
-      estadosPreviosRef.current = {};
-    }
+    estadosPreviosRef.current = {};
 
-    const q = query(collection(db, 'cargas'), where('fechaOperacion', '==', hoy));
+    const q = query(
+      collection(db, coleccion('cargas')),
+      where('fechaOperacion', '==', fechaConsulta)
+    );
+
     const unsub = onSnapshot(q, (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as CargaExtendida));
       list.sort((a, b) => (b.horaInicio || '').localeCompare(a.horaInicio || ''));
 
-      const mapaActual =
-        estadosPreviosRef &&
-        typeof estadosPreviosRef === 'object' &&
-        estadosPreviosRef.current &&
-        typeof estadosPreviosRef.current === 'object'
-          ? estadosPreviosRef.current
-          : {};
+      const mapaActual = estadosPreviosRef.current || {};
 
-      if (cargaInicialRef.current) {
+      if (cargaInicialRef.current || !esDiaEnVivo) {
         const snapshotInicial: Record<string, Carga['estado']> = {};
         list.forEach((c) => {
           snapshotInicial[c.id] = c.estado;
         });
-        if (estadosPreviosRef && typeof estadosPreviosRef === 'object') {
-          estadosPreviosRef.current = snapshotInicial;
-        }
+        estadosPreviosRef.current = snapshotInicial;
         cargaInicialRef.current = false;
       } else {
         let huboNuevaCarga = false;
@@ -252,9 +285,7 @@ export default function MonitorPage() {
         list.forEach((c) => {
           siguienteMapa[c.id] = c.estado;
         });
-        if (estadosPreviosRef && typeof estadosPreviosRef === 'object') {
-          estadosPreviosRef.current = siguienteMapa;
-        }
+        estadosPreviosRef.current = siguienteMapa;
 
         if (huboFinalizacion) {
           reproducirTono('FINALIZADA');
@@ -269,7 +300,7 @@ export default function MonitorPage() {
     });
 
     return () => unsub();
-  }, [hoy]);
+  }, [fechaConsulta, hoy]);
 
   const buscarChoferDeCarga = (carga: CargaExtendida): ChoferMonitor | undefined => {
     if (carga.choferId) {
@@ -282,16 +313,18 @@ export default function MonitorPage() {
   };
 
   const handleDescargar = async () => {
-    if (!fechaDescarga || descargando) return;
+    if (!fechaConsulta || descargando) return;
     setDescargando(true);
-    await descargarCargasCSV(fechaDescarga);
+    await descargarCargasCSV(fechaConsulta);
     setDescargando(false);
   };
 
-  // --- Cálculo de KPIs operativos del día ---
-  const activasHoy = cargas.filter((c) => c.estado !== 'CANCELADA');
-  const todasCargando = activasHoy.filter((c) => c.estado === 'CARGANDO');
-  const todasDespachadas = activasHoy.filter(
+  const esHoyConsultado = Boolean(hoy && fechaConsulta === hoy);
+
+  // --- Cálculo de KPIs operativos de la fecha consultada ---
+  const activasDia = cargas.filter((c) => c.estado !== 'CANCELADA');
+  const todasCargando = activasDia.filter((c) => c.estado === 'CARGANDO');
+  const todasDespachadas = activasDia.filter(
     (c) => c.estado === 'EN_RUTA' || c.estado === 'FINALIZADA'
   );
 
@@ -308,7 +341,8 @@ export default function MonitorPage() {
 
   const unidadMasDemorada: UnidadDemorada | null = todasCargando.reduce<UnidadDemorada | null>(
     (max, c) => {
-      const mins = obtenerMinutosDiferencia(c.horaInicio);
+      const finRef = esHoyConsultado ? undefined : c.horaSalida || c.horaRegreso || c.horaInicio;
+      const mins = obtenerMinutosDiferencia(c.horaInicio, finRef);
       if (mins === null) return max;
       if (!max || mins > max.minutos) {
         return { nombre: c.unidadNombre, minutos: mins };
@@ -322,12 +356,15 @@ export default function MonitorPage() {
     .filter((c) => Boolean(c.horaSalida))
     .sort((a, b) => (b.horaSalida || '').localeCompare(a.horaSalida || ''));
   const ultimaSalida = salidasOrdenadas[0] || null;
-  const haceUltimaSalidaMin = ultimaSalida ? obtenerMinutosDiferencia(ultimaSalida.horaSalida) : null;
+  const haceUltimaSalidaMin =
+    ultimaSalida && esHoyConsultado
+      ? obtenerMinutosDiferencia(ultimaSalida.horaSalida)
+      : null;
 
   // --- Filtrado por búsqueda ---
   const texto = busqueda.trim().toLowerCase();
 
-  const cargasFiltradas = activasHoy.filter((c) => {
+  const cargasFiltradas = activasDia.filter((c) => {
     if (!texto) return true;
     const matchUnidad = c.unidadNombre.toLowerCase().includes(texto);
     const matchChofer = c.choferNombre.toLowerCase().includes(texto);
@@ -361,19 +398,32 @@ export default function MonitorPage() {
           />
 
           <div>
-            <div className="flex items-center gap-2">
-              <Radio className="w-4 h-4 text-emerald-400 animate-pulse" />
+            <div className="flex items-center gap-2 flex-wrap">
+              <Radio
+                className={`w-4 h-4 ${
+                  esHoyConsultado ? 'text-emerald-400 animate-pulse' : 'text-amber-400'
+                }`}
+              />
               <h1 className="text-xl font-bold tracking-tight">Monitor de Cargas y Rutas</h1>
+              <span
+                className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
+                  esHoyConsultado
+                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+                    : 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+                }`}
+              >
+                {esHoyConsultado ? 'En vivo • Hoy' : `Histórico • ${fechaConsulta}`}
+              </span>
             </div>
             <p className="text-xs text-slate-400">
-              {hoy || 'Cargando fecha...'}
+              Operación: {hoy || 'Cargando fecha...'} • Viendo: {fechaConsulta || '---'}
               {horaActual ? ` • Hora local: ${horaActual}` : ''}
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 flex-1 max-w-2xl justify-end">
-          <div className="relative flex-1 min-w-[200px] max-w-xs">
+        <div className="flex flex-wrap items-center gap-2.5 flex-1 max-w-4xl justify-end">
+          <div className="relative flex-1 min-w-[180px] max-w-xs">
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
             <input
               type="text"
@@ -387,14 +437,27 @@ export default function MonitorPage() {
           <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-1.5">
             <input
               type="date"
-              value={fechaDescarga}
-              onChange={(e) => setFechaDescarga(e.target.value)}
+              value={fechaConsulta}
+              onChange={(e) => {
+                if (e.target.value) setFechaConsulta(e.target.value);
+              }}
               className="bg-transparent text-xs text-slate-200 outline-none"
             />
+            {!esHoyConsultado && hoy && (
+              <button
+                type="button"
+                onClick={() => setFechaConsulta(hoy)}
+                title="Volver al día de hoy en vivo"
+                className="flex items-center gap-1 bg-sky-600 hover:bg-sky-500 text-white px-2 py-1.5 rounded-lg text-xs font-semibold transition"
+              >
+                <CalendarSync className="w-3.5 h-3.5" />
+                Hoy
+              </button>
+            )}
             <button
               type="button"
               onClick={handleDescargar}
-              disabled={!fechaDescarga || descargando}
+              disabled={!fechaConsulta || descargando}
               className="flex items-center gap-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white px-2.5 py-1.5 rounded-lg text-xs font-semibold transition"
             >
               <Download className="w-3.5 h-3.5" />
@@ -408,6 +471,8 @@ export default function MonitorPage() {
           >
             <Settings className="w-4 h-4" /> Catálogos
           </Link>
+
+          <BarraSesionModulo />
         </div>
       </header>
 
@@ -488,15 +553,17 @@ export default function MonitorPage() {
               </p>
               <p className="text-lg font-bold text-white truncate">
                 {ultimaSalida
-                  ? haceUltimaSalidaMin === 0
-                    ? 'Justo ahora'
-                    : `Hace ${formatearDuracion(haceUltimaSalidaMin)}`
-                  : 'Sin salidas hoy'}
+                  ? esHoyConsultado && haceUltimaSalidaMin !== null
+                    ? haceUltimaSalidaMin === 0
+                      ? 'Justo ahora'
+                      : `Hace ${formatearDuracion(haceUltimaSalidaMin)}`
+                    : formatearHoraLocal(ultimaSalida.horaSalida)
+                  : 'Sin salidas'}
               </p>
               <p className="text-[11px] text-slate-500 truncate">
                 {ultimaSalida
                   ? `${ultimaSalida.unidadNombre} (${formatearHoraLocal(ultimaSalida.horaSalida)})`
-                  : 'Aún no sale ninguna unidad'}
+                  : 'Sin unidades despachadas en la fecha'}
               </p>
             </div>
           </div>
@@ -516,12 +583,15 @@ export default function MonitorPage() {
 
             {cargando.length === 0 ? (
               <div className="text-center py-12 text-slate-500 border border-dashed border-slate-800 rounded-xl">
-                Sin unidades cargando en este momento
+                Sin unidades cargando en esta fecha
               </div>
             ) : (
               <div className="space-y-3">
                 {cargando.map((c) => {
-                  const espera = formatearDuracion(obtenerMinutosDiferencia(c.horaInicio));
+                  const finRef = esHoyConsultado
+                    ? undefined
+                    : c.horaSalida || c.horaRegreso || c.horaInicio;
+                  const espera = formatearDuracion(obtenerMinutosDiferencia(c.horaInicio, finRef));
                   return (
                     <div
                       key={c.id}
@@ -593,7 +663,9 @@ export default function MonitorPage() {
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
                 <CheckCircle className="w-5 h-5 text-emerald-400" />
-                <h2 className="text-lg font-bold text-emerald-400">En Ruta Hoy</h2>
+                <h2 className="text-lg font-bold text-emerald-400">
+                  {esHoyConsultado ? 'En Ruta Hoy' : `En Ruta (${fechaConsulta})`}
+                </h2>
               </div>
               <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-sm font-bold px-3 py-0.5 rounded-full">
                 {enRuta.length}
@@ -602,7 +674,7 @@ export default function MonitorPage() {
 
             {enRuta.length === 0 ? (
               <div className="text-center py-12 text-slate-500 border border-dashed border-slate-800 rounded-xl">
-                Sin unidades activas en ruta en este momento
+                Sin unidades en ruta en esta fecha
               </div>
             ) : (
               <div className="space-y-3">
@@ -653,7 +725,7 @@ export default function MonitorPage() {
                               </span>
                             )}
                             <span>
-                              • Destino:{' '}
+                              - Destino:{' '}
                               <span className="font-semibold text-emerald-300">{c.destino}</span>
                             </span>
                           </div>
@@ -708,7 +780,11 @@ export default function MonitorPage() {
             <div className="flex items-center gap-2.5">
               <Flag className="w-5 h-5 text-sky-400" />
               <div>
-                <h2 className="text-base font-bold text-sky-300">Rutas Finalizadas Hoy</h2>
+                <h2 className="text-base font-bold text-sky-300">
+                  {esHoyConsultado
+                    ? 'Rutas Finalizadas Hoy'
+                    : `Rutas Finalizadas (${fechaConsulta})`}
+                </h2>
                 <p className="text-xs text-slate-400">
                   Unidades que ya concluyeron su recorrido y regresaron a patio
                 </p>
@@ -721,7 +797,7 @@ export default function MonitorPage() {
 
           {finalizadas.length === 0 ? (
             <div className="text-center py-8 text-sm text-slate-500 border border-dashed border-slate-800 rounded-xl">
-              Aún no se han finalizado rutas el día de hoy
+              Sin rutas finalizadas en la fecha seleccionada
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
@@ -805,5 +881,13 @@ export default function MonitorPage() {
         onDesbloquear={desbloquearAudios}
       />
     </div>
+  );
+}
+
+export default function MonitorPage() {
+  return (
+    <ProteccionModulo moduloRequerido="monitor">
+      <MonitorContenido />
+    </ProteccionModulo>
   );
 }

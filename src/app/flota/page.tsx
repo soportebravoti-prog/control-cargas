@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { db, Unidad, Chofer } from '@/lib/firebase';
+import { db, coleccion, Unidad, Chofer } from '@/lib/firebase';
 import { BotonTema, useTemaApp } from '@/components/BotonTema';
 import { IndicadorEstadoUnidad } from '@/components/IndicadorEstadoUnidad';
 import { IndicadorEstadoChofer } from '@/components/IndicadorEstadoChofer';
+import ProteccionModulo from '@/components/ProteccionModulo';
+import BarraSesionModulo from '@/components/BarraSesionModulo';
 import {
   addDoc,
   collection,
@@ -101,12 +103,10 @@ function cargaCorrespondeAUnidad(
   u: UnidadExt,
   todasLasUnidades: UnidadExt[]
 ): boolean {
-  // 1. Coincidencia estricta por ID único de Firestore
   if (cg.unidadId) {
     return cg.unidadId === u.id;
   }
 
-  // 2. Si el registro viejo no tiene unidadId, prohibido empatar si hay más de una unidad con ese nombre
   const nombreCarga = normalizarTexto(cg.unidadNombre || cg.unidad);
   const nombreUnidad = normalizarTexto(u.nombre);
   if (!nombreCarga || !nombreUnidad || nombreCarga !== nombreUnidad) {
@@ -217,7 +217,7 @@ function estadoVigenciaFecha(fechaIso?: string | null): {
   };
 }
 
-export default function FlotaPage() {
+function FlotaContenido() {
   const tema = useTemaApp();
   const esOscuro = tema === 'dark';
 
@@ -228,13 +228,11 @@ export default function FlotaPage() {
   const [tab, setTab] = useState<'unidades' | 'choferes'>('unidades');
   const [originUrl, setOriginUrl] = useState<string>('');
 
-  // Visor de imagen ampliada
   const [imagenAmpliada, setImagenAmpliada] = useState<{
     titulo: string;
     src: string;
   } | null>(null);
 
-  // Modal Unidad
   const [modalUnidadAbierto, setModalUnidadAbierto] = useState(false);
   const [unidadEditando, setUnidadEditando] = useState<UnidadExt | null>(null);
   const [uNombre, setUNombre] = useState('');
@@ -252,10 +250,8 @@ export default function FlotaPage() {
   const [uFotos, setUFotos] = useState<FotosUnidadExt>({});
   const [guardandoUnidad, setGuardandoUnidad] = useState(false);
 
-  // Modal QR Unidad
   const [unidadQr, setUnidadQr] = useState<UnidadExt | null>(null);
 
-  // Modal Chofer
   const [modalChoferAbierto, setModalChoferAbierto] = useState(false);
   const [choferEditando, setChoferEditando] = useState<ChoferExt | null>(null);
   const [cNombre, setCNombre] = useState('');
@@ -283,9 +279,9 @@ export default function FlotaPage() {
     setOriginUrl(window.location.origin);
     setHoyIso(new Date().toLocaleDateString('en-CA'));
 
-    const qU = query(collection(db, 'unidades'), where('activo', '==', true));
-    const qC = query(collection(db, 'choferes'), where('activo', '==', true));
-    const qCr = collection(db, 'cargas');
+    const qU = query(collection(db, coleccion('unidades')), where('activo', '==', true));
+    const qC = query(collection(db, coleccion('choferes')), where('activo', '==', true));
+    const qCr = collection(db, coleccion('cargas'));
 
     const unsubU = onSnapshot(qU, (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as UnidadExt));
@@ -524,9 +520,9 @@ export default function FlotaPage() {
       };
 
       if (unidadEditando) {
-        await updateDoc(doc(db, 'unidades', unidadEditando.id), payload);
+        await updateDoc(doc(db, coleccion('unidades'), unidadEditando.id), payload);
       } else {
-        await addDoc(collection(db, 'unidades'), payload);
+        await addDoc(collection(db, coleccion('unidades')), payload);
       }
       setModalUnidadAbierto(false);
     } catch (err) {
@@ -606,9 +602,9 @@ export default function FlotaPage() {
       };
 
       if (choferEditando) {
-        await updateDoc(doc(db, 'choferes', choferEditando.id), payload);
+        await updateDoc(doc(db, coleccion('choferes'), choferEditando.id), payload);
       } else {
-        await addDoc(collection(db, 'choferes'), payload);
+        await addDoc(collection(db, coleccion('choferes')), payload);
       }
       setModalChoferAbierto(false);
     } catch (err) {
@@ -642,7 +638,7 @@ export default function FlotaPage() {
       }`}
     >
       <header
-        className={`border-b px-4 py-3.5 sticky top-0 z-10 flex items-center justify-between gap-3 ${
+        className={`border-b px-4 py-3.5 sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 ${
           esOscuro
             ? 'bg-slate-900 border-slate-800'
             : 'bg-white border-slate-200 shadow-sm'
@@ -670,7 +666,7 @@ export default function FlotaPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => (tab === 'unidades' ? abrirModalUnidad() : abrirModalChofer())}
@@ -681,6 +677,7 @@ export default function FlotaPage() {
               {tab === 'unidades' ? 'Nueva Unidad' : 'Nuevo Chofer'}
             </span>
           </button>
+          <BarraSesionModulo />
           <BotonTema />
         </div>
       </header>
@@ -1592,5 +1589,13 @@ export default function FlotaPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function FlotaPage() {
+  return (
+    <ProteccionModulo moduloRequerido="flota">
+      <FlotaContenido />
+    </ProteccionModulo>
   );
 }

@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { db, Unidad, Chofer, Carga } from '@/lib/firebase';
+import { db, coleccion, Unidad, Chofer, Carga } from '@/lib/firebase';
 import { descargarCargasCSV } from '@/lib/exportarCargas';
 import { DesbloqueoAudioModal } from '@/components/DesbloqueoAudioModal';
 import { PanelAvisos } from '@/components/PanelAvisos';
+import ProteccionModulo from '@/components/ProteccionModulo';
+import BarraSesionModulo from '@/components/BarraSesionModulo';
 import {
   collection,
   addDoc,
@@ -105,7 +107,7 @@ function cargaPerteneceAUnidad(carga: CargaExtendida, unidad: UnidadExtendida): 
   return Boolean(cNombre && (cNombre === uNombre || cNombre === uEtiqueta));
 }
 
-export default function PatioPage() {
+function PatioContenido() {
   const [unidades, setUnidades] = useState<UnidadExtendida[]>([]);
   const [choferes, setChoferes] = useState<Chofer[]>([]);
   const [cargasHoy, setCargasHoy] = useState<CargaExtendida[]>([]);
@@ -204,9 +206,9 @@ export default function PatioPage() {
       estadosPreviosRef.current = {};
     }
 
-    const qUnidades = query(collection(db, 'unidades'), where('activo', '==', true));
-    const qChoferes = query(collection(db, 'choferes'), where('activo', '==', true));
-    const qCargas = query(collection(db, 'cargas'), where('fechaOperacion', '==', hoy));
+    const qUnidades = query(collection(db, coleccion('unidades')), where('activo', '==', true));
+    const qChoferes = query(collection(db, coleccion('choferes')), where('activo', '==', true));
+    const qCargas = query(collection(db, coleccion('cargas')), where('fechaOperacion', '==', hoy));
 
     const unsubU = onSnapshot(qUnidades, (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as UnidadExtendida));
@@ -311,7 +313,7 @@ export default function PatioPage() {
   const finalizarRuta = async (cargaId: string) => {
     try {
       setFinalizandoId(cargaId);
-      await updateDoc(doc(db, 'cargas', cargaId), {
+      await updateDoc(doc(db, coleccion('cargas'), cargaId), {
         estado: 'FINALIZADA',
         horaRegreso: new Date().toISOString(),
       });
@@ -323,7 +325,7 @@ export default function PatioPage() {
   const retomarRuta = async (cargaId: string) => {
     try {
       setRetomandoId(cargaId);
-      await updateDoc(doc(db, 'cargas', cargaId), {
+      await updateDoc(doc(db, coleccion('cargas'), cargaId), {
         estado: 'EN_RUTA',
         horaRegreso: null,
       });
@@ -382,7 +384,7 @@ export default function PatioPage() {
       : remisiones;
 
     setLoading(true);
-    await addDoc(collection(db, 'cargas'), {
+    await addDoc(collection(db, coleccion('cargas')), {
       unidadId: unidad.id,
       unidadNombre: unidad.nombre,
       unidadModelo: modeloUnidad,
@@ -410,7 +412,7 @@ export default function PatioPage() {
     const nueva = (extraRemision[carga.id] || '').trim().toUpperCase();
     if (!nueva || carga.remisiones.includes(nueva)) return;
 
-    await updateDoc(doc(db, 'cargas', carga.id), {
+    await updateDoc(doc(db, coleccion('cargas'), carga.id), {
       remisiones: [...carga.remisiones, nueva],
     });
 
@@ -418,7 +420,7 @@ export default function PatioPage() {
   };
 
   const quitarRemisionDeCarga = async (carga: Carga, remisionAQuitar: string) => {
-    await updateDoc(doc(db, 'cargas', carga.id), {
+    await updateDoc(doc(db, coleccion('cargas'), carga.id), {
       remisiones: carga.remisiones.filter((r) => r !== remisionAQuitar),
     });
   };
@@ -432,7 +434,7 @@ export default function PatioPage() {
     const limpio = nuevoDestino.trim();
     if (!limpio) return;
 
-    await updateDoc(doc(db, 'cargas', cargaId), {
+    await updateDoc(doc(db, coleccion('cargas'), cargaId), {
       destino: limpio,
     });
 
@@ -441,7 +443,7 @@ export default function PatioPage() {
   };
 
   const despacharUnidad = async (id: string) => {
-    await updateDoc(doc(db, 'cargas', id), {
+    await updateDoc(doc(db, coleccion('cargas'), id), {
       estado: 'EN_RUTA',
       horaSalida: new Date().toISOString(),
     });
@@ -464,7 +466,7 @@ export default function PatioPage() {
 
     try {
       setCancelandoId(cargaACancelar.id);
-      await updateDoc(doc(db, 'cargas', cargaACancelar.id), {
+      await updateDoc(doc(db, coleccion('cargas'), cargaACancelar.id), {
         estado: 'CANCELADA',
         horaCancelacion: new Date().toISOString(),
         motivoCancelacion: motivoCancelacion.trim(),
@@ -495,7 +497,7 @@ export default function PatioPage() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 pb-12">
-      <header className="bg-slate-900 text-white px-4 py-3.5 shadow sticky top-0 z-10 flex items-center justify-between gap-2">
+      <header className="bg-slate-900 text-white px-4 py-3.5 shadow sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2.5">
           <Link
             href="/"
@@ -511,9 +513,13 @@ export default function PatioPage() {
           />
           <h1 className="font-bold text-base sm:text-lg">Patio — Registro</h1>
         </div>
-        <span className="text-xs bg-slate-800 px-2.5 py-1 rounded-full text-slate-300 shrink-0">
-          {cargandoAhora.length} en patio • {enRutaHoy.length} en ruta
-        </span>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs bg-slate-800 px-2.5 py-1 rounded-full text-slate-300 shrink-0">
+            {cargandoAhora.length} en patio • {enRutaHoy.length} en ruta
+          </span>
+          <BarraSesionModulo />
+        </div>
       </header>
 
       <div className="max-w-6xl mx-auto p-4 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -619,7 +625,7 @@ export default function PatioPage() {
                       {!modeloUnidadSeleccionada && (
                         <span className="text-amber-700">
                           {' '}
-                          • (Sin modelo capturado en Control de Flota)
+                          - (Sin modelo capturado en Control de Flota)
                         </span>
                       )}
                     </p>
@@ -1216,7 +1222,7 @@ export default function PatioPage() {
                   {resolverModeloDeCarga(cargaEnRutaPorFinalizar)
                     ? ` — ${resolverModeloDeCarga(cargaEnRutaPorFinalizar)}`
                     : ''}{' '}
-                  • Vuelta #{cargaEnRutaPorFinalizar.vuelta || 1}
+                  - Vuelta #{cargaEnRutaPorFinalizar.vuelta || 1}
                 </p>
               </div>
             </div>
@@ -1283,7 +1289,7 @@ export default function PatioPage() {
                     {resolverModeloDeCarga(cargaACancelar)
                       ? ` — ${resolverModeloDeCarga(cargaACancelar)}`
                       : ''}{' '}
-                    • Vuelta #{cargaACancelar.vuelta || 1}
+                    - Vuelta #{cargaACancelar.vuelta || 1}
                   </p>
                 </div>
               </div>
@@ -1352,5 +1358,13 @@ export default function PatioPage() {
         onDesbloquear={desbloquearAudios}
       />
     </div>
+  );
+}
+
+export default function PatioPage() {
+  return (
+    <ProteccionModulo moduloRequerido="patio">
+      <PatioContenido />
+    </ProteccionModulo>
   );
 }

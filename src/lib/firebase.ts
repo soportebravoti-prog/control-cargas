@@ -1,5 +1,10 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
+import {
+  getAuth,
+  browserLocalPersistence,
+  setPersistence,
+} from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -12,6 +17,56 @@ const firebaseConfig = {
 
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const db = getFirestore(app);
+export const auth = getAuth(app);
+
+if (typeof window !== 'undefined') {
+  setPersistence(auth, browserLocalPersistence).catch(() => {});
+}
+
+/**
+ * En localhost usa prefijo `dev_` para separar pruebas de la operación real en Vercel.
+ * En producción (Vercel u otro dominio) devuelve el nombre exacto de la colección.
+ */
+export function coleccion(base: string): string {
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    if (host === 'localhost' || host === '127.0.0.1') {
+      return `dev_${base}`;
+    }
+  }
+  return base;
+}
+
+/**
+ * Perfiles de usuario y permisos por módulo (usa `dev_usuarios` en local y `usuarios` en producción).
+ */
+export function coleccionUsuarios(): string {
+  return coleccion('usuarios');
+}
+
+export type ModuloApp = 'patio' | 'monitor' | 'flota' | 'chofer' | 'catalogos';
+
+export type RolBaseUsuario =
+  | 'sistemas'
+  | 'admin'
+  | 'patio'
+  | 'monitor'
+  | 'flota'
+  | 'chofer';
+
+export interface PerfilUsuario {
+  uid: string;
+  nombre: string;
+  correo: string;
+  rolBase: RolBaseUsuario;
+  modulos: ModuloApp[];
+  pin?: string;
+  activo: boolean;
+  choferId?: string | null;
+  unidadId?: string | null;
+  creadoEn?: string;
+  actualizadoEn?: string;
+}
 
 export interface FotosUnidad {
   frente?: string;
@@ -116,6 +171,7 @@ export interface RegistroCombustible {
   fechaIso: string;
   horaTexto: string;
   notas?: string;
+  ticketImagen?: string;
 }
 
 export interface ReporteRevisionUnidad {

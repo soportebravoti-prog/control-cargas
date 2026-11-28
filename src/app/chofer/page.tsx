@@ -4,8 +4,20 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { BrowserQRCodeReader } from '@zxing/browser';
-import { db, Chofer, Unidad, NivelRevision } from '@/lib/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
+import {
+  auth,
+  db,
+  coleccion,
+  coleccionUsuarios,
+  Chofer,
+  Unidad,
+  NivelRevision,
+  PerfilUsuario,
+} from '@/lib/firebase';
 import { BotonTema, useTemaApp } from '@/components/BotonTema';
+import ProteccionModulo from '@/components/ProteccionModulo';
+import BarraSesionModulo from '@/components/BarraSesionModulo';
 import {
   addDoc,
   collection,
@@ -226,6 +238,8 @@ function ContenidoChofer() {
   const [choferes, setChoferes] = useState<Chofer[]>([]);
   const [unidades, setUnidades] = useState<UnidadExtendida[]>([]);
   const [cargas, setCargas] = useState<CargaDoc[]>([]);
+  const [perfilesUsuario, setPerfilesUsuario] = useState<PerfilUsuario[]>([]);
+  const [usuarioAuth, setUsuarioAuth] = useState<{ uid: string; email: string } | null>(null);
   const [revisionesHoy, setRevisionesHoy] = useState<
     Array<{ unidadId?: string; unidadNombre?: string; kilometraje?: number | null }>
   >([]);
@@ -237,12 +251,14 @@ function ContenidoChofer() {
     'QR' | 'PATIO' | 'BASE' | 'MANUAL' | null
   >(null);
 
+  const aplicoPredeterminadoChoferRef = useRef<string>('');
+  const seleccionManualUnidadRef = useRef<boolean>(false);
+
   const [pestana, setPestana] = useState<'ruta' | 'gasolina' | 'cierre'>('ruta');
   const [mensajeEstado, setMensajeEstado] = useState<string | null>(null);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [ocupado, setOcupado] = useState(false);
 
-  // Audios del chofer
   const audioSalidaRef = useRef<HTMLAudioElement | null>(null);
   const audioFinalizadoRef = useRef<HTMLAudioElement | null>(null);
 
@@ -338,24 +354,24 @@ function ContenidoChofer() {
   }, [imagenAmpliada]);
 
   useEffect(() => {
-    const choferGuardado = window.localStorage.getItem(CLAVE_CHOFER_STORAGE);
-    if (choferGuardado) setChoferId(choferGuardado);
-
-    if (unidadQueryParam) {
-      setUnidadId(unidadQueryParam);
-      setOrigenAsignacion('QR');
-      window.localStorage.setItem(CLAVE_UNIDAD_STORAGE, unidadQueryParam);
-    } else {
-      const unidadGuardada = window.localStorage.getItem(CLAVE_UNIDAD_STORAGE);
-      if (unidadGuardada) setUnidadId(unidadGuardada);
-    }
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setUsuarioAuth({
+          uid: user.uid,
+          email: (user.email || '').trim().toLowerCase(),
+        });
+      } else {
+        setUsuarioAuth(null);
+      }
+    });
 
     const hoyIso = obtenerFechaHoyIso();
-    const qChoferes = query(collection(db, 'choferes'), where('activo', '==', true));
-    const qUnidades = query(collection(db, 'unidades'), where('activo', '==', true));
-    const qCargas = collection(db, 'cargas');
+    const qChoferes = query(collection(db, coleccion('choferes')), where('activo', '==', true));
+    const qUnidades = query(collection(db, coleccion('unidades')), where('activo', '==', true));
+    const qCargas = collection(db, coleccion('cargas'));
+    const qUsuarios = collection(db, coleccionUsuarios());
     const qReportesHoy = query(
-      collection(db, 'reportes_flota'),
+      collection(db, coleccion('reportes_flota')),
       where('fechaIso', '==', hoyIso)
     );
 
@@ -376,6 +392,24 @@ function ContenidoChofer() {
       setCargas(lista);
     });
 
+    const unsubUsr = onSnapshot(qUsuarios, (snap) => {
+      const lista = snap.docs.map((d) => {
+        const data = d.data() as Partial<PerfilUsuario>;
+        return {
+          uid: data.uid || d.id,
+          nombre: data.nombre || data.correo || d.id,
+          correo: (data.correo || '').trim().toLowerCase(),
+          rolBase: data.rolBase || 'patio',
+          modulos: Array.isArray(data.modulos) ? data.modulos : [],
+          pin: data.pin || '',
+          activo: data.activo !== false,
+          choferId: data.choferId || null,
+          unidadId: data.unidadId || null,
+        } as PerfilUsuario;
+      });
+      setPerfilesUsuario(lista);
+    });
+
     const unsubRep = onSnapshot(qReportesHoy, (snap) => {
       const revs = snap.docs
         .map((d) => d.data())
@@ -389,12 +423,57 @@ function ContenidoChofer() {
     });
 
     return () => {
+      unsubAuth();
       unsubC();
       unsubU();
       unsubCr();
+      unsubUsr();
       unsubRep();
     };
-  }, [unidadQueryParam]);
+  }, []);
+
+  const perfilActual = useMemo<PerfilUsuario | null>(() => {
+    if (!usuarioAuth) return null;
+    const porUid = perfilesUsuario.find((p) => p.uid === usuarioAuth.uid);
+    if (porUid) return porUid;
+    if (usuarioAuth.email) {
+      return perfilesUsuario.find((p) => p.correo === usuarioAuth.email) || null;
+    }
+    return null;
+  }, [usuarioAuth, perfilesUsuario]);
+
+  const choferVinculadoSesion = useMemo<Chofer | null>(() => {
+    if (choferes.length === 0) return null;
+    if (perfilActual?.choferId) {
+      const porId = choferes.find((c) => c.id === perfilActual.choferId);
+      if (porId) return porId;
+    }
+    if (usuarioAuth?.email) {
+      const porCorreo = choferes.find(
+        (c) => normalizarTexto((c as Chofer & { correo?: string }).correo) === usuarioAuth.email
+      );
+      if (porCorreo) return porCorreo;
+    }
+    if (perfilActual?.nombre) {
+      const porNombre = choferes.find((c) => coincideNombre(c.nombre, perfilActual.nombre));
+      if (porNombre) return porNombre;
+    }
+    return null;
+  }, [choferes, perfilActual, usuarioAuth]);
+
+  const restringirAUnChofer = useMemo(() => {
+    if (!perfilActual) return false;
+    if (perfilActual.rolBase === 'sistemas' || perfilActual.rolBase === 'admin') {
+      return false;
+    }
+    return perfilActual.rolBase === 'chofer' || Boolean(choferVinculadoSesion);
+  }, [perfilActual, choferVinculadoSesion]);
+
+  const choferesDisponibles = useMemo(() => {
+    if (!restringirAUnChofer) return choferes;
+    if (choferVinculadoSesion) return [choferVinculadoSesion];
+    return [];
+  }, [restringirAUnChofer, choferes, choferVinculadoSesion]);
 
   const resolverUnidadParaChofer = useCallback(
     (
@@ -423,14 +502,18 @@ function ContenidoChofer() {
         if (unPatio) return { unidad: unPatio, origen: 'PATIO' };
       }
 
+      const unidadPerfilId =
+        perfilActual?.choferId === choferObj.id ? perfilActual?.unidadId : null;
+
       const unBase =
+        (unidadPerfilId ? listaUnidades.find((u) => u.id === unidadPerfilId) : undefined) ||
         listaUnidades.find((u) => u.id === choferObj.unidadAsignadaId) ||
         listaUnidades.find((u) => u.choferDefaultId === choferObj.id);
 
       if (unBase) return { unidad: unBase, origen: 'BASE' };
       return null;
     },
-    []
+    [perfilActual]
   );
 
   const resolverChoferParaUnidad = useCallback(
@@ -468,30 +551,67 @@ function ContenidoChofer() {
   );
 
   useEffect(() => {
-    if (choferes.length === 0 || unidades.length === 0) return;
-
-    if (unidadQueryParam) {
-      const chDetectado = resolverChoferParaUnidad(
-        unidadQueryParam,
-        choferes,
-        unidades,
-        cargas
-      );
-      if (chDetectado && chDetectado.id !== choferId) {
-        setChoferId(chDetectado.id);
-        window.localStorage.setItem(CLAVE_CHOFER_STORAGE, chDetectado.id);
+    if (restringirAUnChofer && choferVinculadoSesion) {
+      if (choferId !== choferVinculadoSesion.id) {
+        setChoferId(choferVinculadoSesion.id);
+        window.localStorage.setItem(CLAVE_CHOFER_STORAGE, choferVinculadoSesion.id);
       }
       return;
     }
 
-    if (choferId && !unidadId) {
-      const res = resolverUnidadParaChofer(choferId, choferes, unidades, cargas);
-      if (res) {
-        setUnidadId(res.unidad.id);
-        setOrigenAsignacion(res.origen);
-        window.localStorage.setItem(CLAVE_UNIDAD_STORAGE, res.unidad.id);
+    if (!restringirAUnChofer && !choferId) {
+      const choferGuardado = window.localStorage.getItem(CLAVE_CHOFER_STORAGE);
+      if (choferGuardado) {
+        setChoferId(choferGuardado);
       }
-    } else if (unidadId && !choferId) {
+    }
+  }, [restringirAUnChofer, choferVinculadoSesion, choferId]);
+
+  useEffect(() => {
+    if (unidadQueryParam) {
+      seleccionManualUnidadRef.current = true;
+      setUnidadId(unidadQueryParam);
+      setOrigenAsignacion('QR');
+      window.localStorage.setItem(CLAVE_UNIDAD_STORAGE, unidadQueryParam);
+    } else if (!restringirAUnChofer) {
+      const unidadGuardada = window.localStorage.getItem(CLAVE_UNIDAD_STORAGE);
+      if (unidadGuardada && !unidadId) {
+        setUnidadId(unidadGuardada);
+      }
+    }
+  }, [unidadQueryParam, restringirAUnChofer, unidadId]);
+
+  useEffect(() => {
+    if (choferes.length === 0 || unidades.length === 0) return;
+
+    if (unidadQueryParam) {
+      if (!restringirAUnChofer) {
+        const chDetectado = resolverChoferParaUnidad(
+          unidadQueryParam,
+          choferes,
+          unidades,
+          cargas
+        );
+        if (chDetectado && chDetectado.id !== choferId) {
+          setChoferId(chDetectado.id);
+          window.localStorage.setItem(CLAVE_CHOFER_STORAGE, chDetectado.id);
+        }
+      }
+      return;
+    }
+
+    if (choferId && aplicoPredeterminadoChoferRef.current !== choferId) {
+      aplicoPredeterminadoChoferRef.current = choferId;
+      if (!seleccionManualUnidadRef.current) {
+        const res = resolverUnidadParaChofer(choferId, choferes, unidades, cargas);
+        if (res) {
+          setUnidadId(res.unidad.id);
+          setOrigenAsignacion(res.origen);
+          setCambiandoUnidad(false);
+          window.localStorage.setItem(CLAVE_UNIDAD_STORAGE, res.unidad.id);
+        }
+      }
+    } else if (!restringirAUnChofer && unidadId && !choferId) {
       const chDetectado = resolverChoferParaUnidad(unidadId, choferes, unidades, cargas);
       if (chDetectado) {
         setChoferId(chDetectado.id);
@@ -505,12 +625,19 @@ function ContenidoChofer() {
     unidadQueryParam,
     choferId,
     unidadId,
+    restringirAUnChofer,
     resolverChoferParaUnidad,
     resolverUnidadParaChofer,
   ]);
 
   const handleSeleccionarChofer = (nuevoChoferId: string) => {
+    if (restringirAUnChofer && choferVinculadoSesion && nuevoChoferId !== choferVinculadoSesion.id) {
+      return;
+    }
+
     setChoferId(nuevoChoferId);
+    aplicoPredeterminadoChoferRef.current = nuevoChoferId;
+    seleccionManualUnidadRef.current = false;
     setMensajeEstado(null);
     setErrorBanner(null);
     setJornadaCerradaInfo(null);
@@ -529,11 +656,16 @@ function ContenidoChofer() {
       setOrigenAsignacion(res.origen);
       setCambiandoUnidad(false);
       window.localStorage.setItem(CLAVE_UNIDAD_STORAGE, res.unidad.id);
+    } else {
+      setUnidadId('');
+      setOrigenAsignacion(null);
+      window.localStorage.removeItem(CLAVE_UNIDAD_STORAGE);
     }
   };
 
   const handleSeleccionarUnidad = useCallback(
     (nuevaUnidadId: string, origen: 'QR' | 'MANUAL' = 'MANUAL') => {
+      seleccionManualUnidadRef.current = Boolean(nuevaUnidadId);
       setUnidadId(nuevaUnidadId);
       setOrigenAsignacion(nuevaUnidadId ? origen : null);
       setCambiandoUnidad(false);
@@ -547,18 +679,21 @@ function ContenidoChofer() {
 
       window.localStorage.setItem(CLAVE_UNIDAD_STORAGE, nuevaUnidadId);
 
-      const chDetectado = resolverChoferParaUnidad(
-        nuevaUnidadId,
-        choferes,
-        unidades,
-        cargas
-      );
-      if (chDetectado) {
-        setChoferId(chDetectado.id);
-        window.localStorage.setItem(CLAVE_CHOFER_STORAGE, chDetectado.id);
+      if (!restringirAUnChofer) {
+        const chDetectado = resolverChoferParaUnidad(
+          nuevaUnidadId,
+          choferes,
+          unidades,
+          cargas
+        );
+        if (chDetectado) {
+          setChoferId(chDetectado.id);
+          aplicoPredeterminadoChoferRef.current = chDetectado.id;
+          window.localStorage.setItem(CLAVE_CHOFER_STORAGE, chDetectado.id);
+        }
       }
     },
-    [choferes, unidades, cargas, resolverChoferParaUnidad]
+    [choferes, unidades, cargas, restringirAUnChofer, resolverChoferParaUnidad]
   );
 
   const choferActual = useMemo(
@@ -712,7 +847,7 @@ function ContenidoChofer() {
       return false;
     }
 
-    await addDoc(collection(db, 'reportes_flota'), {
+    await addDoc(collection(db, coleccion('reportes_flota')), {
       tipo: 'REVISION_SALIDA',
       tipoReporte: 'REVISION_SALIDA',
       unidadId: unidadActual.id,
@@ -766,7 +901,7 @@ function ContenidoChofer() {
           mostrarError(`${unidadActual.nombre} ya tiene una ruta activa en curso.`);
           return;
         }
-        await updateDoc(doc(db, 'cargas', cargaAbiertaUnidad.id), {
+        await updateDoc(doc(db, coleccion('cargas'), cargaAbiertaUnidad.id), {
           unidadId: unidadActual.id,
           unidadModelo: modeloUnidad,
           choferId: choferActual?.id || cargaAbiertaUnidad.choferId || null,
@@ -786,7 +921,7 @@ function ContenidoChofer() {
           normalizarTexto(cg.estado) !== 'cancelada'
       ).length;
 
-      await addDoc(collection(db, 'cargas'), {
+      await addDoc(collection(db, coleccion('cargas')), {
         unidadId: unidadActual.id,
         unidadNombre: unidadActual.nombre,
         unidadModelo: modeloUnidad,
@@ -827,7 +962,7 @@ function ContenidoChofer() {
       const okRevision = await registrarRevisionObligatoriaSiFalta();
       if (!okRevision) return;
 
-      await updateDoc(doc(db, 'cargas', carga.id), {
+      await updateDoc(doc(db, coleccion('cargas'), carga.id), {
         ...(unidadActual
           ? {
               unidadId: unidadActual.id,
@@ -856,7 +991,7 @@ function ContenidoChofer() {
     if (ocupado) return;
     try {
       setOcupado(true);
-      await updateDoc(doc(db, 'cargas', carga.id), {
+      await updateDoc(doc(db, coleccion('cargas'), carga.id), {
         estado: 'FINALIZADA',
         horaRegreso: new Date().toISOString(),
       });
@@ -890,7 +1025,7 @@ function ContenidoChofer() {
 
     try {
       setOcupado(true);
-      await addDoc(collection(db, 'reportes_flota'), {
+      await addDoc(collection(db, coleccion('reportes_flota')), {
         tipo: 'CARGA_GASOLINA',
         tipoReporte: 'GASOLINA',
         unidadId: unidadActual.id,
@@ -962,7 +1097,7 @@ function ContenidoChofer() {
     try {
       setOcupado(true);
 
-      await addDoc(collection(db, 'reportes_flota'), {
+      await addDoc(collection(db, coleccion('reportes_flota')), {
         tipo: 'CIERRE_DIA',
         tipoReporte: 'CIERRE_DIA',
         unidadId: unidadActual.id,
@@ -985,7 +1120,7 @@ function ContenidoChofer() {
       });
 
       for (const cg of cargasActivasVisibles) {
-        await updateDoc(doc(db, 'cargas', cg.id), {
+        await updateDoc(doc(db, coleccion('cargas'), cg.id), {
           estado: 'FINALIZADA',
           horaRegreso: new Date().toISOString(),
         });
@@ -1188,7 +1323,7 @@ function ContenidoChofer() {
       }`}
     >
       <header
-        className={`border-b px-4 py-3.5 sticky top-0 z-10 flex items-center justify-between gap-3 ${
+        className={`border-b px-4 py-3.5 sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 ${
           esOscuro ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
         }`}
       >
@@ -1214,7 +1349,10 @@ function ContenidoChofer() {
           </div>
         </div>
 
-        <BotonTema />
+        <div className="flex flex-wrap items-center gap-2">
+          <BarraSesionModulo />
+          <BotonTema />
+        </div>
       </header>
 
       <main className="max-w-3xl mx-auto p-4 space-y-4">
@@ -1230,7 +1368,7 @@ function ContenidoChofer() {
               </label>
               {choferActual && (
                 <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-                  Identificado
+                  {restringirAUnChofer ? 'Tu perfil' : 'Identificado'}
                 </span>
               )}
             </div>
@@ -1261,17 +1399,28 @@ function ContenidoChofer() {
               <select
                 id="selector-chofer"
                 value={choferId}
+                disabled={restringirAUnChofer}
                 onChange={(e) => handleSeleccionarChofer(e.target.value)}
-                className={claseCampo}
+                className={`${claseCampo} ${
+                  restringirAUnChofer ? 'opacity-90 cursor-not-allowed' : ''
+                }`}
               >
-                <option value="">-- Selecciona tu nombre --</option>
-                {choferes.map((c) => (
+                {!restringirAUnChofer && (
+                  <option value="">-- Selecciona tu nombre --</option>
+                )}
+                {choferesDisponibles.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.nombre}
                   </option>
                 ))}
               </select>
             </div>
+
+            {restringirAUnChofer && !choferVinculadoSesion && (
+              <p className="text-[11px] text-amber-400">
+                Tu cuenta aún no tiene un chofer vinculado en Catálogos (Usuarios y Módulos).
+              </p>
+            )}
           </div>
 
           <div
@@ -1301,7 +1450,7 @@ function ContenidoChofer() {
                       : origenAsignacion === 'PATIO'
                       ? 'Asignada por Patio'
                       : origenAsignacion === 'BASE'
-                      ? 'Unidad base'
+                      ? 'Predeterminada'
                       : 'Seleccionada'}
                   </span>
                 )}
@@ -1355,7 +1504,7 @@ function ContenidoChofer() {
                 onChange={(e) => handleSeleccionarUnidad(e.target.value, 'MANUAL')}
                 className={claseCampo}
               >
-                <option value="">-- Escanea QR o elige tu unidad --</option>
+                <option value="">-- Escanea QR o elige cualquier unidad --</option>
                 {unidades.map((u) => {
                   const detalleModelo = obtenerDetalleModeloUnidad(u);
                   return (
@@ -1974,14 +2123,16 @@ function ContenidoChofer() {
 
 export default function ChoferPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen bg-slate-950 text-slate-300 flex items-center justify-center text-sm">
-          Cargando portal del chofer...
-        </div>
-      }
-    >
-      <ContenidoChofer />
-    </Suspense>
+    <ProteccionModulo moduloRequerido="chofer">
+      <Suspense
+        fallback={
+          <div className="min-h-screen bg-slate-950 text-slate-300 flex items-center justify-center text-sm">
+            Cargando portal del chofer...
+          </div>
+        }
+      >
+        <ContenidoChofer />
+      </Suspense>
+    </ProteccionModulo>
   );
 }
